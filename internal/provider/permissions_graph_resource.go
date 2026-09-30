@@ -92,7 +92,9 @@ Metabase exposes a single resource to define all permissions related to database
 
 The permissions graph cannot be created or deleted. Trying to create it will result in an error. It should be imported instead. Trying to delete the resource will succeed with no impact on Metabase (it is a no-op).
 
-Permissions for the Administrators group cannot be changed. To avoid issues during the update, all permissions for the Administrators group are ignored by default. This behavior can be changed using the ignored groups attribute.`,
+Permissions for the Administrators group cannot be changed. To avoid issues during the update, all permissions for the Administrators group are ignored by default. This behavior can be changed using the ignored groups attribute.
+
+To only manage the permissions of a given group on a given database, and leave all other permissions untouched, use the ` + "`metabase_database_permission`" + ` resource instead.`,
 
 		Attributes: map[string]schema.Attribute{
 			"revision": schema.Int64Attribute{
@@ -665,7 +667,10 @@ func (r *PermissionsGraphResource) Update(ctx context.Context, req resource.Upda
 		return
 	}
 
+	// Serialized with the other writes to the graph made by the provider (see `permissionsGraphMutex`).
+	permissionsGraphMutex.Lock()
 	updateResp, err := r.client.ReplacePermissionsGraphWithResponse(ctx, *body)
+	permissionsGraphMutex.Unlock()
 
 	resp.Diagnostics.Append(checkMetabaseResponse(updateResp, err, []int{200}, "update permissions graph")...)
 	if resp.Diagnostics.HasError() {
