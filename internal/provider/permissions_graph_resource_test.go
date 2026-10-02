@@ -1,11 +1,15 @@
 package provider
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/flovouin/terraform-provider-metabase/metabase"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 // perTableCreateQueries builds a `create_queries` `jsonencode` expression covering every table in the sample
@@ -141,4 +145,245 @@ func TestAccPermissionsGraphResource(t *testing.T) {
 			},
 		},
 	})
+}
+
+// Returns the permissions of the given group on the given database, as returned by the Metabase API.
+func testAccGetDatabasePermissions(groupId string, databaseId string) (*metabase.PermissionsGraphDatabasePermissions, error) {
+	response, err := testAccMetabaseClient.GetPermissionsGraphWithResponse(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode() != 200 {
+		return nil, fmt.Errorf("Received unexpected response from the Metabase API when getting the permissions graph.")
+	}
+
+	permissions, ok := response.JSON200.Groups[groupId][databaseId]
+	if !ok {
+		return nil, fmt.Errorf("The permissions graph contains no permissions for group %s and database %s.", groupId, databaseId)
+	}
+
+	return &permissions, nil
+}
+
+// Checks that the permissions of the given group on the given database have been revoked in Metabase.
+func testAccCheckRevokedDatabasePermissions(groupId string, databaseId func(*terraform.State) (string, error)) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		dbId, err := databaseId(s)
+		if err != nil {
+			return err
+		}
+
+		permissions, err := testAccGetDatabasePermissions(groupId, dbId)
+		if err != nil {
+			return err
+		}
+
+		if !isRevokedDatabasePermissions(*permissions, metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted) {
+			b, _ := json.Marshal(permissions)
+			return fmt.Errorf("Expected the permissions of group %s on database %s to be revoked, got: %s.", groupId, dbId, b)
+		}
+
+		return nil
+	}
+}
+
+// Returns the ID of the given resource in the state.
+func testAccResourceId(resourceName string) func(*terraform.State) (string, error) {
+	return func(s *terraform.State) (string, error) {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return "", fmt.Errorf("Failed to find resource %s in state.", resourceName)
+		}
+
+		return rs.Primary.ID, nil
+	}
+}
+
+// Creates a database in the same apply as an update of the permissions graph. Metabase grants default permissions on new
+// databases, which are not part of the plan when the database is not referenced by the graph. They are reported as drift
+// after the apply, and revoked by the next one.
+func TestAccPermissionsGraphResourceWithNewDatabase(t *testing.T) {
+	newDatabase := fmt.Sprintf(`
+resource "metabase_database" "new" {
+  name = "🆕 New database"
+
+  custom_details = {
+    engine = "postgres"
+
+    details_json = jsonencode({
+      host           = "%s"
+      port           = 5432
+      dbname         = "%s"
+      user           = "%s"
+      password       = "%s"
+      ssl            = false
+      tunnel-enabled = false
+    })
+
+    redacted_attributes = [
+      "password",
+    ]
+  }
+}
+`,
+		os.Getenv("PG_HOST"),
+		os.Getenv("PG_DATABASE"),
+		os.Getenv("PG_USER"),
+		os.Getenv("PG_PASSWORD"),
+	)
+	config := providerApiKeyConfig + newDatabase + testAccPermissionsGraphResource(
+		fmt.Sprintf("%q", string(metabase.PermissionsGraphDatabasePermissionsCreateQueries0No)),
+		"\"unrestricted\"",
+	)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerApiKeyConfig + testAccPermissionsGraphResource(
+					fmt.Sprintf("%q", string(metabase.PermissionsGraphDatabasePermissionsCreateQueries0QueryBuilderAndNative)),
+					"\"unrestricted\"",
+				),
+			},
+			{
+				// The apply succeeds, but the default permissions granted on the new database are reported as drift.
+				Config:             config,
+				ExpectNonEmptyPlan: true,
+			},
+			{
+				// The default permissions are revoked, and no longer reported once revoked.
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckRevokedDatabasePermissions("1", testAccResourceId("metabase_database.new")),
+				),
+			},
+		},
+	})
+}
+
+func testAccPermissionsGraphResourceWithoutPermissions() string {
+	return `
+import {
+  to = metabase_permissions_graph.graph
+  id = "1"
+}
+
+resource "metabase_permissions_graph" "graph" {
+  advanced_permissions = false
+
+  permissions = []
+}
+`
+}
+
+// Removes a (group, database) pair from the configuration, which revokes its permissions.
+func TestAccPermissionsGraphResourceRevokesRemovedPermissions(t *testing.T) {
+	sampleDatabase := func(*terraform.State) (string, error) { return "1", nil }
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerApiKeyConfig + testAccPermissionsGraphResource(
+					fmt.Sprintf("%q", string(metabase.PermissionsGraphDatabasePermissionsCreateQueries0QueryBuilderAndNative)),
+					"\"unrestricted\"",
+				),
+			},
+			{
+				// The revoked permissions are no longer reported, otherwise the plan after the apply would not be empty.
+				Config: providerApiKeyConfig + testAccPermissionsGraphResourceWithoutPermissions(),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("metabase_permissions_graph.graph", "permissions.#", "0"),
+					testAccCheckRevokedDatabasePermissions("1", sampleDatabase),
+				),
+			},
+			{
+				// Restores the permissions of the All Users group on the sample database for the other tests.
+				Config: providerApiKeyConfig + testAccPermissionsGraphResource(
+					fmt.Sprintf("%q", string(metabase.PermissionsGraphDatabasePermissionsCreateQueries0QueryBuilderAndNative)),
+					"\"unrestricted\"",
+				),
+			},
+		},
+	})
+}
+
+func TestIsRevokedDatabasePermissions(t *testing.T) {
+	t.Parallel()
+
+	unrestricted := metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted
+	blocked := metabase.PermissionsGraphDatabasePermissionsViewData0Blocked
+
+	tests := map[string]struct {
+		permissions string
+		viewData    metabase.PermissionsGraphDatabasePermissionsViewData0
+		expected    bool
+	}{
+		"revoked, as returned by the free edition": {`{"view-data":"unrestricted"}`, unrestricted, true},
+		"revoked, with explicit values":            {`{"view-data":"unrestricted","create-queries":"no","download":{"schemas":"none"},"data-model":{"schemas":"none"},"details":"no"}`, unrestricted, true},
+		"revoked with blocked view data":           {`{"view-data":"blocked"}`, blocked, true},
+		"other view data":                          {`{"view-data":"unrestricted"}`, blocked, false},
+		"granular view data":                       {`{"view-data":{"PUBLIC":"unrestricted"}}`, unrestricted, false},
+		"create queries":                           {`{"view-data":"unrestricted","create-queries":"query-builder"}`, unrestricted, false},
+		"download":                                 {`{"view-data":"unrestricted","download":{"schemas":"full"}}`, unrestricted, false},
+		"data model":                               {`{"view-data":"unrestricted","data-model":{"schemas":"all"}}`, unrestricted, false},
+		"details":                                  {`{"view-data":"unrestricted","details":"yes"}`, unrestricted, false},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var permissions metabase.PermissionsGraphDatabasePermissions
+			if err := json.Unmarshal([]byte(test.permissions), &permissions); err != nil {
+				t.Fatalf("Failed to parse permissions: %v", err)
+			}
+
+			if actual := isRevokedDatabasePermissions(permissions, test.viewData); actual != test.expected {
+				t.Errorf("Expected %v, got %v.", test.expected, actual)
+			}
+		})
+	}
+}
+
+func TestMakeRevokedDatabasePermissions(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		viewData            metabase.PermissionsGraphDatabasePermissionsViewData0
+		advancedPermissions bool
+		expected            string
+	}{
+		"free edition": {
+			viewData: metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted,
+			expected: `{"create-queries":"no","download":{"schemas":"none"},"view-data":"unrestricted"}`,
+		},
+		"advanced permissions": {
+			viewData:            metabase.PermissionsGraphDatabasePermissionsViewData0Blocked,
+			advancedPermissions: true,
+			expected:            `{"create-queries":"no","data-model":{"schemas":"none"},"details":"no","download":{"schemas":"none"},"view-data":"blocked"}`,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			permissions, err := makeRevokedDatabasePermissions(test.viewData, test.advancedPermissions)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			actual, err := json.Marshal(permissions)
+			if err != nil {
+				t.Fatalf("Failed to marshal permissions: %v", err)
+			}
+			if string(actual) != test.expected {
+				t.Errorf("Expected %s, got %s.", test.expected, actual)
+			}
+			if !isRevokedDatabasePermissions(*permissions, test.viewData) {
+				t.Errorf("Expected the revoked permissions to be detected as revoked.")
+			}
+		})
+	}
 }

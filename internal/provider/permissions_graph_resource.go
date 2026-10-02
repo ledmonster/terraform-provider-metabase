@@ -18,6 +18,7 @@ import (
 
 // Ensures provider defined types fully satisfy framework interfaces.
 var _ resource.ResourceWithImportState = &PermissionsGraphResource{}
+var _ resource.ResourceWithValidateConfig = &PermissionsGraphResource{}
 
 // Creates a new permissions graph resource.
 func NewPermissionsGraphResource() resource.Resource {
@@ -34,10 +35,11 @@ type PermissionsGraphResource struct {
 // The Terraform model for the graph.
 // Permissions are stored as a list of edges rather than a map like in the API.
 type PermissionsGraphResourceModel struct {
-	Revision            types.Int64 `tfsdk:"revision"`             // The revision number for the graph, set by Metabase.
-	AdvancedPermissions types.Bool  `tfsdk:"advanced_permissions"` // Whether advanced permissions should be set. This is only available to paid versions of Metabase.
-	IgnoredGroups       types.Set   `tfsdk:"ignored_groups"`       // The list of groups that should be ignored when updating permissions.
-	Permissions         types.Set   `tfsdk:"permissions"`          // The list of permissions (edges) in the graph.
+	Revision            types.Int64  `tfsdk:"revision"`             // The revision number for the graph, set by Metabase.
+	AdvancedPermissions types.Bool   `tfsdk:"advanced_permissions"` // Whether advanced permissions should be set. This is only available to paid versions of Metabase.
+	IgnoredGroups       types.Set    `tfsdk:"ignored_groups"`       // The list of groups that should be ignored when updating permissions.
+	DefaultViewData     types.String `tfsdk:"default_view_data"`    // The `view-data` permission of the edges which are not in the configuration.
+	Permissions         types.Set    `tfsdk:"permissions"`          // The list of permissions (edges) in the graph.
 }
 
 // The model for a single edge in the permissions graph.
@@ -92,7 +94,11 @@ Metabase exposes a single resource to define all permissions related to database
 
 The permissions graph cannot be created or deleted. Trying to create it will result in an error. It should be imported instead. Trying to delete the resource will succeed with no impact on Metabase (it is a no-op).
 
-Permissions for the Administrators group cannot be changed. To avoid issues during the update, all permissions for the Administrators group are ignored by default. This behavior can be changed using the ignored groups attribute.`,
+Permissions for the Administrators group cannot be changed. To avoid issues during the update, all permissions for the Administrators group are ignored by default. This behavior can be changed using the ignored groups attribute.
+
+Metabase never removes a (group, database) pair from the graph. Instead, the pairs which are not in the configuration have their permissions revoked: ` + "`view_data`" + ` is set to the value of ` + "`default_view_data`" + `, and ` + "`create_queries`" + `, ` + "`download`" + ` (as well as ` + "`data_model`" + ` and ` + "`details`" + ` with advanced permissions) are revoked. Pairs with revoked permissions are considered absent when reading the graph.
+
+Metabase grants default permissions when a database or a group is created. Those are reported as changes on the next plan, and are revoked by the next apply if they are not part of the configuration.`,
 
 		Attributes: map[string]schema.Attribute{
 			"revision": schema.Int64Attribute{
@@ -106,6 +112,10 @@ Permissions for the Administrators group cannot be changed. To avoid issues duri
 			"ignored_groups": schema.SetAttribute{
 				ElementType:         types.Int64Type,
 				MarkdownDescription: "The list of group IDs that should be ignored when reading and updating permissions. By default, this contains the Administrators group (`[2]`).",
+				Optional:            true,
+			},
+			"default_view_data": schema.StringAttribute{
+				MarkdownDescription: "The `view_data` permission of the (group, database) pairs which are not in the configuration: pairs removed from the configuration are set to it, with their other permissions revoked, and pairs with only this permission are considered absent when reading the graph. `unrestricted` by default, or `blocked`, which requires a paid plan with advanced permissions.",
 				Optional:            true,
 			},
 			"permissions": schema.SetNestedAttribute{
@@ -308,6 +318,75 @@ func hasViewDataPermissions(p metabase.PermissionsGraphDatabasePermissions) bool
 	return err == nil && len(viewDataBytes) > 0 && string(viewDataBytes) != "null"
 }
 
+// Returns the `view-data` permission of the edges which are not in the configuration, given the value of the
+// `default_view_data` attribute. It is `unrestricted` when the attribute is not set, which is available on every edition.
+func getDefaultViewData(defaultViewData types.String) metabase.PermissionsGraphDatabasePermissionsViewData0 {
+	if defaultViewData.IsNull() || defaultViewData.IsUnknown() {
+		return metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted
+	}
+
+	return metabase.PermissionsGraphDatabasePermissionsViewData0(defaultViewData.ValueString())
+}
+
+// Makes the permissions of a revoked edge. Metabase never removes an edge from the graph, so this is the lowest level of
+// permissions an edge can have: `view-data` is set to the given value, and `create-queries` and `download` are revoked,
+// as well as `data-model` and `details` with advanced permissions.
+func makeRevokedDatabasePermissions(viewData metabase.PermissionsGraphDatabasePermissionsViewData0, advancedPermissions bool) (*metabase.PermissionsGraphDatabasePermissions, error) {
+	var p metabase.PermissionsGraphDatabasePermissions
+
+	if err := p.ViewData.FromPermissionsGraphDatabasePermissionsViewData0(viewData); err != nil {
+		return nil, err
+	}
+
+	var createQueries metabase.PermissionsGraphDatabasePermissions_CreateQueries
+	if err := createQueries.FromPermissionsGraphDatabasePermissionsCreateQueries0(metabase.PermissionsGraphDatabasePermissionsCreateQueries0No); err != nil {
+		return nil, err
+	}
+	p.CreateQueries = &createQueries
+
+	var schemasNone metabase.PermissionsGraphDatabaseAccess_Schemas
+	if err := schemasNone.FromPermissionsGraphDatabaseAccessSchemas0(metabase.PermissionsGraphDatabaseAccessSchemas0None); err != nil {
+		return nil, err
+	}
+	p.Download = &metabase.PermissionsGraphDatabaseAccess{Schemas: &schemasNone}
+
+	if advancedPermissions {
+		p.DataModel = &metabase.PermissionsGraphDatabaseAccess{Schemas: &schemasNone}
+		no := metabase.PermissionsGraphDatabasePermissionsDetailsNo
+		p.Details = &no
+	}
+
+	return &p, nil
+}
+
+// Returns whether an edge returned by the Metabase API has the permissions of a revoked edge (see
+// `makeRevokedDatabasePermissions`). Metabase omits revoked permissions from its responses, e.g. a revoked edge is
+// returned as `{"view-data": "unrestricted"}` on the free edition.
+func isRevokedDatabasePermissions(p metabase.PermissionsGraphDatabasePermissions, viewData metabase.PermissionsGraphDatabasePermissionsViewData0) bool {
+	if v, err := p.ViewData.AsPermissionsGraphDatabasePermissionsViewData0(); err != nil || v != viewData {
+		return false
+	}
+
+	if p.CreateQueries != nil {
+		if v, err := p.CreateQueries.AsPermissionsGraphDatabasePermissionsCreateQueries0(); err != nil || v != metabase.PermissionsGraphDatabasePermissionsCreateQueries0No {
+			return false
+		}
+	}
+
+	isNone := func(a *metabase.PermissionsGraphDatabaseAccess) bool {
+		if a == nil || a.Schemas == nil {
+			return true
+		}
+		v, err := a.Schemas.AsPermissionsGraphDatabaseAccessSchemas0()
+		return err == nil && v == metabase.PermissionsGraphDatabaseAccessSchemas0None
+	}
+	if !isNone(p.Download) || !isNone(p.DataModel) {
+		return false
+	}
+
+	return p.Details == nil || *p.Details == metabase.PermissionsGraphDatabasePermissionsDetailsNo
+}
+
 // Updates the given `PermissionsGraphResourceModel` from the `PermissionsGraph` returned by the Metabase API.
 func updateModelFromPermissionsGraph(ctx context.Context, g metabase.PermissionsGraph, data *PermissionsGraphResourceModel) diag.Diagnostics {
 	var diags diag.Diagnostics
@@ -319,6 +398,8 @@ func updateModelFromPermissionsGraph(ctx context.Context, g metabase.Permissions
 	if diags.HasError() {
 		return diags
 	}
+
+	defaultViewData := getDefaultViewData(data.DefaultViewData)
 
 	// Getting the permissions of the current model, to handle weird cases in the Metabase API response.
 	existingModelPermissions := make([]DatabasePermissions, 0, len(data.Permissions.Elements()))
@@ -367,6 +448,12 @@ func updateModelFromPermissionsGraph(ctx context.Context, g metabase.Permissions
 					existingPermission = &existingPerm
 					break
 				}
+			}
+
+			// Metabase never removes edges from the graph, so revoked edges are considered absent. They are only kept if they
+			// are already part of the model, e.g. when they are explicitly defined in the configuration.
+			if existingPermission == nil && isRevokedDatabasePermissions(dbPermissions, defaultViewData) {
+				continue
 			}
 
 			permissionsObject, objDiags := makePermissionsObjectFromDatabasePermissions(ctx, groupIdInt, dbIdInt, dbPermissions, existingPermission)
@@ -500,8 +587,7 @@ func makeDatabasePermissionsFromModel(ctx context.Context, p DatabasePermissions
 
 // Makes the entire permissions graph from the Terraform model.
 // Passing the current state allows comparing the plan to an existing set of permissions. This allows explicitly
-// removing permissions by sending "none" values to the Metabase API.
-// The Metabase API automatically removes "none" values and does not return them.
+// revoking the permissions removed from the plan (see `makeRevokedDatabasePermissions`).
 func makePermissionsGraphFromModel(ctx context.Context, data PermissionsGraphResourceModel, state *PermissionsGraphResourceModel) (*metabase.PermissionsGraph, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
@@ -549,7 +635,7 @@ func makePermissionsGraphFromModel(ctx context.Context, data PermissionsGraphRes
 	}
 
 	// If the state is passed, it is used to detect removed permissions (or permissions added outside of Terraform).
-	// Those permissions are explicitly set to "none" in order to delete them.
+	// Those permissions are explicitly revoked.
 	if state != nil {
 		// When making the request to the Metabase API, the currently known revision number should be passed.
 		// It will be increased and returned by Metabase.
@@ -585,31 +671,12 @@ func makePermissionsGraphFromModel(ctx context.Context, data PermissionsGraphRes
 				continue
 			}
 
-			var schemasNone metabase.PermissionsGraphDatabaseAccess_Schemas
-			err := schemasNone.FromPermissionsGraphDatabaseAccessSchemas0(metabase.PermissionsGraphDatabaseAccessSchemas0None)
+			revokedPermissions, err := makeRevokedDatabasePermissions(getDefaultViewData(data.DefaultViewData), advancedPermissions)
 			if err != nil {
-				diags.AddError("Unexpected error setting schema none value", err.Error())
+				diags.AddError("Unexpected error making revoked permissions.", err.Error())
 				return nil, diags
 			}
-			var createQueriesNo metabase.PermissionsGraphDatabasePermissions_CreateQueries
-			if err := createQueriesNo.FromPermissionsGraphDatabasePermissionsCreateQueries0(metabase.PermissionsGraphDatabasePermissionsCreateQueries0No); err != nil {
-				diags.AddError("Unexpected error setting create-queries to none value", err.Error())
-				return nil, diags
-			}
-			deletedPermissions := metabase.PermissionsGraphDatabasePermissions{
-				CreateQueries: &createQueriesNo,
-			}
-			if advancedPermissions {
-				deletedPermissions.Download = &metabase.PermissionsGraphDatabaseAccess{
-					Schemas: &schemasNone,
-				}
-				deletedPermissions.DataModel = &metabase.PermissionsGraphDatabaseAccess{
-					Schemas: &schemasNone,
-				}
-				no := metabase.PermissionsGraphDatabasePermissionsDetailsNo
-				deletedPermissions.Details = &no
-			}
-			dbPermMap[databaseId] = deletedPermissions
+			dbPermMap[databaseId] = *revokedPermissions
 		}
 	}
 
@@ -617,6 +684,25 @@ func makePermissionsGraphFromModel(ctx context.Context, data PermissionsGraphRes
 		Revision: revision,
 		Groups:   groups,
 	}, diags
+}
+
+func (r *PermissionsGraphResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var defaultViewData types.String
+
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("default_view_data"), &defaultViewData)...)
+	if resp.Diagnostics.HasError() || defaultViewData.IsNull() || defaultViewData.IsUnknown() {
+		return
+	}
+
+	switch metabase.PermissionsGraphDatabasePermissionsViewData0(defaultViewData.ValueString()) {
+	case metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted, metabase.PermissionsGraphDatabasePermissionsViewData0Blocked:
+	default:
+		resp.Diagnostics.AddAttributeError(
+			path.Root("default_view_data"),
+			"Invalid default view data permission.",
+			fmt.Sprintf("Expected %q or %q, got: %q.", metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted, metabase.PermissionsGraphDatabasePermissionsViewData0Blocked, defaultViewData.ValueString()),
+		)
+	}
 }
 
 func (r *PermissionsGraphResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -678,10 +764,10 @@ func (r *PermissionsGraphResource) Update(ctx context.Context, req resource.Upda
 		return
 	}
 
-	resp.Diagnostics.Append(updateModelFromPermissionsGraph(ctx, *updateResp.JSON200, data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
+	// Only the revision is taken from the response, the permissions are the planned ones. Metabase grants default
+	// permissions on new databases and to new groups, e.g. created in the same apply, which would otherwise be reported
+	// as an inconsistent result. Those are reported as drift when the state is refreshed.
+	data.Revision = types.Int64Value(int64(updateResp.JSON200.Revision))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
