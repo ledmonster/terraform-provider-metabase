@@ -99,7 +99,9 @@ Permissions for the Administrators group cannot be changed. To avoid issues duri
 
 Metabase never removes a (group, database) pair from the graph. Instead, the pairs which are not in the configuration have their permissions revoked: ` + "`view_data`" + ` is set to the value of ` + "`default_view_data`" + `, and ` + "`create_queries`" + `, ` + "`download`" + ` (as well as ` + "`data_model`" + ` and ` + "`details`" + ` with advanced permissions) are revoked. Pairs with revoked permissions are considered absent when reading the graph.
 
-Metabase grants default permissions when a database or a group is created. Those are reported as changes on the next plan, and are revoked by the next apply if they are not part of the configuration.`,
+Metabase grants default permissions when a database or a group is created. Those are reported as changes on the next plan, and are revoked by the next apply if they are not part of the configuration.
+
+To only manage the permissions of a given group on a given database, and leave all other permissions untouched, use the ` + "`metabase_database_permission`" + ` resource instead.`,
 
 		Attributes: map[string]schema.Attribute{
 			"revision": schema.Int64Attribute{
@@ -685,23 +687,36 @@ func makePermissionsGraphFromModel(ctx context.Context, data PermissionsGraphRes
 	}, diags
 }
 
-func (r *PermissionsGraphResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
-	var defaultViewData types.String
+// Returns an error if the given value of a `default_view_data` attribute is not supported.
+func checkDefaultViewData(defaultViewData types.String) diag.Diagnostics {
+	var diags diag.Diagnostics
 
-	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("default_view_data"), &defaultViewData)...)
-	if resp.Diagnostics.HasError() || defaultViewData.IsNull() || defaultViewData.IsUnknown() {
-		return
+	if defaultViewData.IsNull() || defaultViewData.IsUnknown() {
+		return diags
 	}
 
 	switch metabase.PermissionsGraphDatabasePermissionsViewData0(defaultViewData.ValueString()) {
 	case metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted, metabase.PermissionsGraphDatabasePermissionsViewData0Blocked:
 	default:
-		resp.Diagnostics.AddAttributeError(
+		diags.AddAttributeError(
 			path.Root("default_view_data"),
 			"Invalid default view data permission.",
 			fmt.Sprintf("Expected %q or %q, got: %q.", metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted, metabase.PermissionsGraphDatabasePermissionsViewData0Blocked, defaultViewData.ValueString()),
 		)
 	}
+
+	return diags
+}
+
+func (r *PermissionsGraphResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var defaultViewData types.String
+
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("default_view_data"), &defaultViewData)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	resp.Diagnostics.Append(checkDefaultViewData(defaultViewData)...)
 }
 
 func (r *PermissionsGraphResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {

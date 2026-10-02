@@ -2,6 +2,7 @@
 
 NEW FEATURES:
 
+- Add the `metabase_database_permission` and `metabase_collection_permission` resources, which each manage a single (group, database) or (group, collection) pair of the permissions graph or the collection graph, and leave all other pairs untouched. Unlike the `metabase_permissions_graph` and `metabase_collection_graph` resources, they can coexist with permissions set in the Metabase interface, much like the `google_*_iam_member` resources compared to `google_*_iam_policy`. Deleting a resource revokes the permissions of its pair, like removing the pair from the graph resources.
 - Add the `default_view_data` attribute to `metabase_permissions_graph`, which sets the `view_data` permission of the (group, database) pairs that are not in the configuration. It defaults to `unrestricted`, and can be set to `blocked` on paid plans with advanced permissions.
 
 BUG FIXES:
