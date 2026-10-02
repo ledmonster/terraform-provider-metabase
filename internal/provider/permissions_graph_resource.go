@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
@@ -115,8 +116,10 @@ Metabase grants default permissions when a database or a group is created. Those
 				Optional:            true,
 			},
 			"default_view_data": schema.StringAttribute{
-				MarkdownDescription: "The `view_data` permission of the (group, database) pairs which are not in the configuration: pairs removed from the configuration are set to it, with their other permissions revoked, and pairs with only this permission are considered absent when reading the graph. `unrestricted` by default, or `blocked`, which requires a paid plan with advanced permissions.",
+				MarkdownDescription: "The `view_data` permission of the (group, database) pairs which are not in the configuration: pairs removed from the configuration are set to it, with their other permissions revoked, and pairs with only this permission are considered absent when reading the graph. Either `unrestricted` (the default), or `blocked`, which requires a paid plan with advanced permissions.",
 				Optional:            true,
+				Computed:            true,
+				Default:             stringdefault.StaticString(string(metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted)),
 			},
 			"permissions": schema.SetNestedAttribute{
 				MarkdownDescription: "A list of permissions for a given group and database. A (group, database) pair should appear only once in the list.",
@@ -319,12 +322,8 @@ func hasViewDataPermissions(p metabase.PermissionsGraphDatabasePermissions) bool
 }
 
 // Returns the `view-data` permission of the edges which are not in the configuration, given the value of the
-// `default_view_data` attribute. It is `unrestricted` when the attribute is not set, which is available on every edition.
+// `default_view_data` attribute.
 func getDefaultViewData(defaultViewData types.String) metabase.PermissionsGraphDatabasePermissionsViewData0 {
-	if defaultViewData.IsNull() || defaultViewData.IsUnknown() {
-		return metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted
-	}
-
 	return metabase.PermissionsGraphDatabasePermissionsViewData0(defaultViewData.ValueString())
 }
 
@@ -715,6 +714,12 @@ func (r *PermissionsGraphResource) Read(ctx context.Context, req resource.ReadRe
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	// The attribute is not set in states created before it existed, nor right after an import. It is set to its default
+	// value, such that the plan does not report a change when it is not in the configuration either.
+	if data.DefaultViewData.IsNull() {
+		data.DefaultViewData = types.StringValue(string(metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted))
 	}
 
 	getResp, err := r.client.GetPermissionsGraphWithResponse(ctx)

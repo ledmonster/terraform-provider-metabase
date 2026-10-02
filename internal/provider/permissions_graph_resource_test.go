@@ -294,6 +294,7 @@ func TestAccPermissionsGraphResourceRevokesRemovedPermissions(t *testing.T) {
 				Config: providerApiKeyConfig + testAccPermissionsGraphResourceWithoutPermissions(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("metabase_permissions_graph.graph", "permissions.#", "0"),
+					resource.TestCheckResourceAttr("metabase_permissions_graph.graph", "default_view_data", "unrestricted"),
 					testAccCheckRevokedDatabasePermissions("1", sampleDatabase),
 				),
 			},

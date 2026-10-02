@@ -83,7 +83,7 @@ resource "metabase_permissions_graph" "graph" {
 
 ### Optional
 
-- `default_view_data` (String) The `view_data` permission of the (group, database) pairs which are not in the configuration: pairs removed from the configuration are set to it, with their other permissions revoked, and pairs with only this permission are considered absent when reading the graph. `unrestricted` by default, or `blocked`, which requires a paid plan with advanced permissions.
+- `default_view_data` (String) The `view_data` permission of the (group, database) pairs which are not in the configuration: pairs removed from the configuration are set to it, with their other permissions revoked, and pairs with only this permission are considered absent when reading the graph. Either `unrestricted` (the default), or `blocked`, which requires a paid plan with advanced permissions.
 - `ignored_groups` (Set of Number) The list of group IDs that should be ignored when reading and updating permissions. By default, this contains the Administrators group (`[2]`).
 
 ### Read-Only
