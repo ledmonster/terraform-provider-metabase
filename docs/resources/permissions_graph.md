@@ -7,6 +7,8 @@ description: |-
   Metabase exposes a single resource to define all permissions related to databases. This means a single permissions graph resource should be defined in the entire Terraform configuration. However this is not the same as the collection graph, and the two can be combined to grant permissions.
   The permissions graph cannot be created or deleted. Trying to create it will result in an error. It should be imported instead. Trying to delete the resource will succeed with no impact on Metabase (it is a no-op).
   Permissions for the Administrators group cannot be changed. To avoid issues during the update, all permissions for the Administrators group are ignored by default. This behavior can be changed using the ignored groups attribute.
+  Metabase never removes a (group, database) pair from the graph. Instead, the pairs which are not in the configuration have their permissions revoked: view_data is set to the value of default_view_data, and create_queries, download (as well as data_model and details with advanced permissions) are revoked. Pairs with revoked permissions are considered absent when reading the graph.
+  Metabase grants default permissions when a database or a group is created. Those are reported as changes on the next plan, and are revoked by the next apply if they are not part of the configuration.
 ---
 
 # metabase_permissions_graph (Resource)
@@ -18,6 +20,10 @@ Metabase exposes a single resource to define all permissions related to database
 The permissions graph cannot be created or deleted. Trying to create it will result in an error. It should be imported instead. Trying to delete the resource will succeed with no impact on Metabase (it is a no-op).
 
 Permissions for the Administrators group cannot be changed. To avoid issues during the update, all permissions for the Administrators group are ignored by default. This behavior can be changed using the ignored groups attribute.
+
+Metabase never removes a (group, database) pair from the graph. Instead, the pairs which are not in the configuration have their permissions revoked: `view_data` is set to the value of `default_view_data`, and `create_queries`, `download` (as well as `data_model` and `details` with advanced permissions) are revoked. Pairs with revoked permissions are considered absent when reading the graph.
+
+Metabase grants default permissions when a database or a group is created. Those are reported as changes on the next plan, and are revoked by the next apply if they are not part of the configuration.
 
 ## Example Usage
 
@@ -44,6 +50,11 @@ resource "metabase_permissions_group" "business_stakeholders" {
 resource "metabase_permissions_graph" "graph" {
   advanced_permissions = false
 
+  # The permissions of the (group, database) pairs which are not listed below, e.g. for the "All Users" group, are
+  # revoked: the group can still view data through the questions it has access to, but it cannot create queries nor
+  # download results. On paid plans with advanced permissions, `default_view_data = "blocked"` also prevents it from
+  # viewing data.
+
   permissions = [
     {
       group          = metabase_permissions_group.data_analysts.id
@@ -57,19 +68,6 @@ resource "metabase_permissions_graph" "graph" {
       # This looks like no other value can be set, at least in the free version of Metabase.
       view_data      = "unrestricted"
       create_queries = "query-builder"
-    },
-    # Permissions for the "All Users" group. Those cannot be removed entirely, but they can be limited.
-    # The example below gives the minimum set of permissions for the free version of Metabase:
-    {
-      group    = 1 # ID for the "All Users" group.
-      database = metabase_database.bigquery.id
-      # Cannot be removed but has no impact when using the free version of Metabase.
-      download = {
-        schemas = "full"
-      }
-      view_data = "unrestricted"
-      # This gives the least access possible.
-      create_queries = "no"
     },
   ]
 }
@@ -85,6 +83,7 @@ resource "metabase_permissions_graph" "graph" {
 
 ### Optional
 
+- `default_view_data` (String) The `view_data` permission of the (group, database) pairs which are not in the configuration: pairs removed from the configuration are set to it, with their other permissions revoked, and pairs with only this permission are considered absent when reading the graph. Either `unrestricted` (the default), or `blocked`, which requires a paid plan with advanced permissions.
 - `ignored_groups` (Set of Number) The list of group IDs that should be ignored when reading and updating permissions. By default, this contains the Administrators group (`[2]`).
 
 ### Read-Only
