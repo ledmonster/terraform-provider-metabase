@@ -40,6 +40,9 @@ import (
 // silently replaces `write` with `read` instead of failing. Other changes are left untouched by the update. Metabase
 // records the author and a remark with each revision, so reading them, if the API exposes them, could tell the two
 // apart.
+//
+// Reading the revision requires admin permissions, which are not needed to create or update collections. Without them,
+// the requests are still serialized but not tracked. Updating the graph requires admin permissions anyway.
 type CollectionGraphTracker struct {
 	// Serializes the requests which can record a new revision of the collection graph. It also protects
 	// `revisionsByProvider`.

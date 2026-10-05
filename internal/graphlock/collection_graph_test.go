@@ -213,6 +213,17 @@ func TestCollectionGraphTrackerUpdateReturnsErrors(t *testing.T) {
 	}
 }
 
+func TestCollectionGraphTrackerUpdateWithoutAdminPermissions(t *testing.T) {
+	graph, client := newFakeCollectionGraph(t)
+	graph.forbidden.Store(true)
+	tracker := NewCollectionGraphTracker()
+
+	sent, err := updateRevision(tracker, client, 0)
+	if !errors.Is(err, errCollectionGraphForbidden) || sent != -1 {
+		t.Errorf("Expected %v without sending the update, got revision %d (error: %v).", errCollectionGraphForbidden, sent, err)
+	}
+}
+
 func TestCollectionGraphTrackerSerializesRequests(t *testing.T) {
 	_, client := newFakeCollectionGraph(t)
 	tracker := NewCollectionGraphTracker()
