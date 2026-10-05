@@ -108,7 +108,8 @@ func (t *CollectionGraphTracker) Track(ctx context.Context, client metabase.Clie
 
 	// Requests from the provider are serialized, so the request recorded the revision if exactly one was recorded
 	// meanwhile. More than one means someone else changed the graph, and nothing is attributed.
-	if after, err := getCollectionGraphRevision(ctx, client); err == nil && after == before+1 {
+	after, err := getCollectionGraphRevision(ctx, client)
+	if err == nil && after == before+1 {
 		t.revisionsByProvider[after] = true
 	}
 
