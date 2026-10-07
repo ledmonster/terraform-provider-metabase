@@ -412,7 +412,7 @@ func updateModelFromPermissionsGraph(ctx context.Context, g metabase.Permissions
 				return diags
 			}
 
-			// Get the existing permission in the model.
+			// The permissions of the pair in the Terraform model, if any.
 			var existingPermission *DatabasePermissions
 			for _, existingPerm := range existingModelPermissions {
 				if existingPerm.Group.Equal(types.Int64Value(int64(groupIdInt))) && existingPerm.Database.Equal(types.Int64Value(int64(dbIdInt))) {
@@ -421,8 +421,13 @@ func updateModelFromPermissionsGraph(ctx context.Context, g metabase.Permissions
 				}
 			}
 
-			// Metabase never removes edges from the graph, so revoked edges are considered absent. They are only kept if they
-			// are already part of the model, e.g. when they are explicitly defined in the configuration.
+			// Metabase never removes a pair from the graph: the pairs removed from the configuration are revoked instead (see
+			// `makeRevokedDatabasePermissions`). Such pairs are skipped, as if they were not in the graph, otherwise they would
+			// be reported as changes on every plan. A pair is skipped when both:
+			//   - It is not in the Terraform model, i.e. in the state, or in the plan after an update. A pair declared in the
+			//     configuration is always read, even with the lowest permissions, otherwise it would be missing from the state.
+			//   - It is revoked. The other pairs which are not in the Terraform model (e.g. permissions granted in the Metabase
+			//     interface) are read, such that they are reported as changes and revoked by the next apply.
 			if existingPermission == nil && isRevokedDatabasePermissions(dbPermissions) {
 				continue
 			}
