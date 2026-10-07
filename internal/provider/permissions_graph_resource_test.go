@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/flovouin/terraform-provider-metabase/metabase"
@@ -231,10 +232,12 @@ resource "metabase_database" "new" {
 		os.Getenv("PG_USER"),
 		os.Getenv("PG_PASSWORD"),
 	)
-	config := providerApiKeyConfig + newDatabase + testAccPermissionsGraphResource(
+	// The graph is updated after the database is created, once Metabase has granted the default permissions.
+	graph := strings.Replace(testAccPermissionsGraphResource(
 		fmt.Sprintf("%q", string(metabase.PermissionsGraphDatabasePermissionsCreateQueries0No)),
 		"\"unrestricted\"",
-	)
+	), "advanced_permissions = false", "advanced_permissions = false\n  depends_on           = [metabase_database.new]", 1)
+	config := providerApiKeyConfig + newDatabase + graph
 
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
