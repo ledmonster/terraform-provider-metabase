@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/flovouin/terraform-provider-metabase/metabase"
@@ -184,6 +186,82 @@ func testAccCheckRevokedDatabasePermissions(groupId string, databaseId func(*ter
 
 		return nil
 	}
+}
+
+// Returns the ID of the given resource in the state.
+func testAccResourceId(resourceName string) func(*terraform.State) (string, error) {
+	return func(s *terraform.State) (string, error) {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return "", fmt.Errorf("Failed to find resource %s in state.", resourceName)
+		}
+
+		return rs.Primary.ID, nil
+	}
+}
+
+// Creates a database in the same apply as an update of the permissions graph. Metabase grants default permissions on new
+// databases, which are not part of the plan when the database is not referenced by the graph. They are reported as drift
+// after the apply, and revoked by the next one.
+func TestAccPermissionsGraphResourceWithNewDatabase(t *testing.T) {
+	newDatabase := fmt.Sprintf(`
+resource "metabase_database" "new" {
+  name = "🆕 New database"
+
+  custom_details = {
+    engine = "postgres"
+
+    details_json = jsonencode({
+      host           = "%s"
+      port           = 5432
+      dbname         = "%s"
+      user           = "%s"
+      password       = "%s"
+      ssl            = false
+      tunnel-enabled = false
+    })
+
+    redacted_attributes = [
+      "password",
+    ]
+  }
+}
+`,
+		os.Getenv("PG_HOST"),
+		os.Getenv("PG_DATABASE"),
+		os.Getenv("PG_USER"),
+		os.Getenv("PG_PASSWORD"),
+	)
+	// The graph is updated after the database is created, once Metabase has granted the default permissions.
+	graph := strings.Replace(testAccPermissionsGraphResource(
+		fmt.Sprintf("%q", string(metabase.PermissionsGraphDatabasePermissionsCreateQueries0No)),
+		"\"unrestricted\"",
+	), "advanced_permissions = false", "advanced_permissions = false\n  depends_on           = [metabase_database.new]", 1)
+	config := providerApiKeyConfig + newDatabase + graph
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerApiKeyConfig + testAccPermissionsGraphResource(
+					fmt.Sprintf("%q", string(metabase.PermissionsGraphDatabasePermissionsCreateQueries0QueryBuilderAndNative)),
+					"\"unrestricted\"",
+				),
+			},
+			{
+				// The apply succeeds, but the default permissions granted on the new database are reported as drift.
+				Config:             config,
+				ExpectNonEmptyPlan: true,
+			},
+			{
+				// The default permissions are revoked, and no longer reported once revoked.
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckRevokedDatabasePermissions("1", testAccResourceId("metabase_database.new")),
+				),
+			},
+		},
+	})
 }
 
 func testAccPermissionsGraphResourceWithoutPermissions() string {
