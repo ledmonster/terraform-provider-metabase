@@ -22,8 +22,8 @@ resource "metabase_permissions_graph" "graph" {
 
   # The permissions of the (group, database) pairs which are not listed below, e.g. for the "All Users" group, are
   # revoked: the group can still view data through the questions it has access to, but it cannot create queries nor
-  # download results. On paid plans with advanced permissions, `default_view_data = "blocked"` also prevents it from
-  # viewing data.
+  # download results. On paid plans with advanced permissions, a pair can be listed with `view_data = "blocked"` to
+  # also prevent the group from viewing data.
 
   permissions = [
     {

@@ -178,7 +178,7 @@ func testAccCheckRevokedDatabasePermissions(groupId string, databaseId func(*ter
 			return err
 		}
 
-		if !isRevokedDatabasePermissions(*permissions, metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted) {
+		if !isRevokedDatabasePermissions(*permissions) {
 			b, _ := json.Marshal(permissions)
 			return fmt.Errorf("Expected the permissions of group %s on database %s to be revoked, got: %s.", groupId, dbId, b)
 		}
@@ -294,7 +294,6 @@ func TestAccPermissionsGraphResourceRevokesRemovedPermissions(t *testing.T) {
 				Config: providerApiKeyConfig + testAccPermissionsGraphResourceWithoutPermissions(),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("metabase_permissions_graph.graph", "permissions.#", "0"),
-					resource.TestCheckResourceAttr("metabase_permissions_graph.graph", "default_view_data", "unrestricted"),
 					testAccCheckRevokedDatabasePermissions("1", sampleDatabase),
 				),
 			},
@@ -312,23 +311,18 @@ func TestAccPermissionsGraphResourceRevokesRemovedPermissions(t *testing.T) {
 func TestIsRevokedDatabasePermissions(t *testing.T) {
 	t.Parallel()
 
-	unrestricted := metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted
-	blocked := metabase.PermissionsGraphDatabasePermissionsViewData0Blocked
-
 	tests := map[string]struct {
 		permissions string
-		viewData    metabase.PermissionsGraphDatabasePermissionsViewData0
 		expected    bool
 	}{
-		"revoked, as returned by the free edition": {`{"view-data":"unrestricted"}`, unrestricted, true},
-		"revoked, with explicit values":            {`{"view-data":"unrestricted","create-queries":"no","download":{"schemas":"none"},"data-model":{"schemas":"none"},"details":"no"}`, unrestricted, true},
-		"revoked with blocked view data":           {`{"view-data":"blocked"}`, blocked, true},
-		"other view data":                          {`{"view-data":"unrestricted"}`, blocked, false},
-		"granular view data":                       {`{"view-data":{"PUBLIC":"unrestricted"}}`, unrestricted, false},
-		"create queries":                           {`{"view-data":"unrestricted","create-queries":"query-builder"}`, unrestricted, false},
-		"download":                                 {`{"view-data":"unrestricted","download":{"schemas":"full"}}`, unrestricted, false},
-		"data model":                               {`{"view-data":"unrestricted","data-model":{"schemas":"all"}}`, unrestricted, false},
-		"details":                                  {`{"view-data":"unrestricted","details":"yes"}`, unrestricted, false},
+		"revoked, as returned by the free edition": {`{"view-data":"unrestricted"}`, true},
+		"revoked, with explicit values":            {`{"view-data":"unrestricted","create-queries":"no","download":{"schemas":"none"},"data-model":{"schemas":"none"},"details":"no"}`, true},
+		"blocked view data":                        {`{"view-data":"blocked"}`, false},
+		"granular view data":                       {`{"view-data":{"PUBLIC":"unrestricted"}}`, false},
+		"create queries":                           {`{"view-data":"unrestricted","create-queries":"query-builder"}`, false},
+		"download":                                 {`{"view-data":"unrestricted","download":{"schemas":"full"}}`, false},
+		"data model":                               {`{"view-data":"unrestricted","data-model":{"schemas":"all"}}`, false},
+		"details":                                  {`{"view-data":"unrestricted","details":"yes"}`, false},
 	}
 
 	for name, test := range tests {
@@ -340,7 +334,7 @@ func TestIsRevokedDatabasePermissions(t *testing.T) {
 				t.Fatalf("Failed to parse permissions: %v", err)
 			}
 
-			if actual := isRevokedDatabasePermissions(permissions, test.viewData); actual != test.expected {
+			if actual := isRevokedDatabasePermissions(permissions); actual != test.expected {
 				t.Errorf("Expected %v, got %v.", test.expected, actual)
 			}
 		})
@@ -351,18 +345,15 @@ func TestMakeRevokedDatabasePermissions(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
-		viewData            metabase.PermissionsGraphDatabasePermissionsViewData0
 		advancedPermissions bool
 		expected            string
 	}{
 		"free edition": {
-			viewData: metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted,
 			expected: `{"create-queries":"no","download":{"schemas":"none"},"view-data":"unrestricted"}`,
 		},
 		"advanced permissions": {
-			viewData:            metabase.PermissionsGraphDatabasePermissionsViewData0Blocked,
 			advancedPermissions: true,
-			expected:            `{"create-queries":"no","data-model":{"schemas":"none"},"details":"no","download":{"schemas":"none"},"view-data":"blocked"}`,
+			expected:            `{"create-queries":"no","data-model":{"schemas":"none"},"details":"no","download":{"schemas":"none"},"view-data":"unrestricted"}`,
 		},
 	}
 
@@ -370,7 +361,7 @@ func TestMakeRevokedDatabasePermissions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			permissions, err := makeRevokedDatabasePermissions(test.viewData, test.advancedPermissions)
+			permissions, err := makeRevokedDatabasePermissions(test.advancedPermissions)
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}
@@ -382,7 +373,7 @@ func TestMakeRevokedDatabasePermissions(t *testing.T) {
 			if string(actual) != test.expected {
 				t.Errorf("Expected %s, got %s.", test.expected, actual)
 			}
-			if !isRevokedDatabasePermissions(*permissions, test.viewData) {
+			if !isRevokedDatabasePermissions(*permissions) {
 				t.Errorf("Expected the revoked permissions to be detected as revoked.")
 			}
 		})
