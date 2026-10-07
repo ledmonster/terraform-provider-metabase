@@ -199,9 +199,10 @@ func testAccResourceId(resourceName string) func(*terraform.State) (string, erro
 	}
 }
 
-// Creates a database in the same apply as an update of the permissions graph. Metabase grants default permissions on new
-// databases, which are not part of the plan when the database is not referenced by the graph. They are reported as drift
-// after the apply, and revoked by the next one.
+// Creates a database in the same apply as an update of the permissions graph. Metabase grants the All Users group full
+// access to the new database, which is not part of the configuration. The graph returned after the update contains this
+// (group, database) pair, which is reported as drift after the apply rather than failing it, and revoked by the next
+// apply.
 func TestAccPermissionsGraphResourceWithNewDatabase(t *testing.T) {
 	newDatabase := fmt.Sprintf(`
 resource "metabase_database" "new" {
@@ -244,12 +245,12 @@ resource "metabase_permissions_graph" "graph" {
   permissions = [
     {
       group    = 1
-      database = 1
+      database = 1 # The sample database, not the new one.
       download = {
         schemas = "full"
       }
       view_data      = "unrestricted"
-      create_queries = "no"
+      create_queries = "no" # Changed from the first step, such that the graph is updated.
     },
   ]
 
@@ -262,18 +263,20 @@ resource "metabase_permissions_graph" "graph" {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
+				// Sets other permissions for the All Users group on the sample database, such that the next step updates the
+				// graph.
 				Config: providerApiKeyConfig + testAccPermissionsGraphResource(
 					fmt.Sprintf("%q", string(metabase.PermissionsGraphDatabasePermissionsCreateQueries0QueryBuilderAndNative)),
 					"\"unrestricted\"",
 				),
 			},
 			{
-				// The apply succeeds, but the default permissions granted on the new database are reported as drift.
+				// The apply succeeds, but the full access of the All Users group to the new database is reported as drift.
 				Config:             config,
 				ExpectNonEmptyPlan: true,
 			},
 			{
-				// The default permissions are revoked, and no longer reported once revoked.
+				// The full access of the All Users group to the new database is revoked, and no longer reported once revoked.
 				Config: config,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckRevokedDatabasePermissions("1", testAccResourceId("metabase_database.new")),
