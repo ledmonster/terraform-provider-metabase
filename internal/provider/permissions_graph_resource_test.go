@@ -286,10 +286,7 @@ func TestMakeRevokedDatabasePermissions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			permissions, err := makeRevokedDatabasePermissions(test.advancedPermissions)
-			if err != nil {
-				t.Fatalf("Unexpected error: %v", err)
-			}
+			permissions := makeRevokedDatabasePermissions(test.advancedPermissions)
 
 			actual, err := json.Marshal(permissions)
 			if err != nil {
@@ -298,7 +295,7 @@ func TestMakeRevokedDatabasePermissions(t *testing.T) {
 			if string(actual) != test.expected {
 				t.Errorf("Expected %s, got %s.", test.expected, actual)
 			}
-			if !isRevokedDatabasePermissions(*permissions) {
+			if !isRevokedDatabasePermissions(permissions) {
 				t.Errorf("Expected the revoked permissions to be detected as revoked.")
 			}
 		})

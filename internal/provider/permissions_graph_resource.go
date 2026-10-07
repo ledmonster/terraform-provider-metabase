@@ -313,32 +313,23 @@ func hasViewDataPermissions(p metabase.PermissionsGraphDatabasePermissions) bool
 // Makes the permissions of a revoked edge. Metabase never removes an edge from the graph, so this is the lowest level of
 // permissions an edge can have: `view-data` is set to `unrestricted`, and `create-queries` and `download` are revoked,
 // as well as `data-model` and `details` with advanced permissions.
-func makeRevokedDatabasePermissions(advancedPermissions bool) (*metabase.PermissionsGraphDatabasePermissions, error) {
-	var p metabase.PermissionsGraphDatabasePermissions
+func makeRevokedDatabasePermissions(advancedPermissions bool) metabase.PermissionsGraphDatabasePermissions {
+	none := metabase.NewDatabaseAccessSchemas(metabase.PermissionsGraphDatabaseAccessSchemas0None)
+	createQueriesNo := metabase.NewCreateQueries(metabase.PermissionsGraphDatabasePermissionsCreateQueries0No)
 
-	if err := p.ViewData.FromPermissionsGraphDatabasePermissionsViewData0(metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted); err != nil {
-		return nil, err
+	p := metabase.PermissionsGraphDatabasePermissions{
+		ViewData:      metabase.NewViewData(metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted),
+		CreateQueries: &createQueriesNo,
+		Download:      &metabase.PermissionsGraphDatabaseAccess{Schemas: &none},
 	}
-
-	var createQueries metabase.PermissionsGraphDatabasePermissions_CreateQueries
-	if err := createQueries.FromPermissionsGraphDatabasePermissionsCreateQueries0(metabase.PermissionsGraphDatabasePermissionsCreateQueries0No); err != nil {
-		return nil, err
-	}
-	p.CreateQueries = &createQueries
-
-	var schemasNone metabase.PermissionsGraphDatabaseAccess_Schemas
-	if err := schemasNone.FromPermissionsGraphDatabaseAccessSchemas0(metabase.PermissionsGraphDatabaseAccessSchemas0None); err != nil {
-		return nil, err
-	}
-	p.Download = &metabase.PermissionsGraphDatabaseAccess{Schemas: &schemasNone}
 
 	if advancedPermissions {
-		p.DataModel = &metabase.PermissionsGraphDatabaseAccess{Schemas: &schemasNone}
 		no := metabase.PermissionsGraphDatabasePermissionsDetailsNo
+		p.DataModel = &metabase.PermissionsGraphDatabaseAccess{Schemas: &none}
 		p.Details = &no
 	}
 
-	return &p, nil
+	return p
 }
 
 // Returns whether an edge returned by the Metabase API has the permissions of a revoked edge (see
@@ -651,12 +642,7 @@ func makePermissionsGraphFromModel(ctx context.Context, data PermissionsGraphRes
 				continue
 			}
 
-			revokedPermissions, err := makeRevokedDatabasePermissions(advancedPermissions)
-			if err != nil {
-				diags.AddError("Unexpected error making revoked permissions.", err.Error())
-				return nil, diags
-			}
-			dbPermMap[databaseId] = *revokedPermissions
+			dbPermMap[databaseId] = makeRevokedDatabasePermissions(advancedPermissions)
 		}
 	}
 
