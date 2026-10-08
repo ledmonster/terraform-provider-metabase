@@ -173,6 +173,10 @@ var errCollectionGraphNotRead = errors.New("the collection graph could not be re
 // Returns whether the given collection exists. Archived collections are considered deleted, like by the
 // `metabase_collection` resource. Metabase omits them from the collection graph, and rejects the permissions of collections
 // which do not exist.
+//
+// TODO: Archiving a collection moves it to the trash, which can be restored. Its permissions are kept, and still define
+// who can see and restore it from the trash, but they can no longer be managed by this resource. They are not part of
+// the collection graph, so they cannot be read, although Metabase accepts updating them.
 func (r *CollectionPermissionResource) collectionExists(ctx context.Context, collectionId string) (bool, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
