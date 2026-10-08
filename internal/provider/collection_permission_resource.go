@@ -41,7 +41,7 @@ type CollectionPermissionResourceModel struct {
 	Id         types.String `tfsdk:"id"`         // The ID of the edge, as `<group>/<collection>`.
 	Group      types.Int64  `tfsdk:"group"`      // The permissions group to which the permission applies.
 	Collection types.String `tfsdk:"collection"` // The collection to which the permission applies. The collection is a string because it could be the `root` collection.
-	Permission types.String `tfsdk:"permission"` // The permission level (read or write).
+	Permission types.String `tfsdk:"permission"` // The permission level (none, read or write).
 }
 
 func (r *CollectionPermissionResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
@@ -54,7 +54,9 @@ Unlike the ` + "`metabase_collection_graph`" + ` resource, which manages the ent
 
 Each change reads the current revision of the collection graph and sends only the managed edge to Metabase. Changes made by the provider are performed one at a time, along with the creation and update of collections.
 
-When the resource is deleted, the permission is set to ` + "`none`" + `, which is the same value used by the ` + "`metabase_collection_graph`" + ` resource when removing an edge. If the permission is set to ` + "`none`" + ` outside of Terraform, the resource is considered missing and will be created again.
+The permission can be set to ` + "`none`" + `, e.g. to make sure a group has no access to a collection, as new collections inherit the permissions of their parent collection. Metabase omits ` + "`none`" + ` from the collection graph, so a pair missing from the graph (e.g. for an archived collection) is read as ` + "`none`" + `.
+
+When the resource is deleted, the permission is set to ` + "`none`" + `, which is the same value used by the ` + "`metabase_collection_graph`" + ` resource when removing an edge.
 
 Permissions for the Administrators group (ID ` + "`2`" + `) cannot be changed, and will result in an error.`,
 
@@ -81,7 +83,7 @@ Permissions for the Administrators group (ID ` + "`2`" + `) cannot be changed, a
 				},
 			},
 			"permission": schema.StringAttribute{
-				MarkdownDescription: "The level of permission (`read` or `write`).",
+				MarkdownDescription: "The level of permission: `none`, `read` or `write`.",
 				Required:            true,
 			},
 		},
@@ -106,17 +108,17 @@ func (r *CollectionPermissionResource) ValidateConfig(ctx context.Context, req r
 	}
 }
 
-// Returns an error if the given permission cannot be set by the resource. `none` is not allowed, as it is the absence
-// of permission, which is obtained by deleting the resource.
+// Returns an error if the given permission is not a collection permission level.
 func checkCollectionPermissionLevel(permission string) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	level := metabase.CollectionPermissionLevel(permission)
-	if level != metabase.CollectionPermissionLevelRead && level != metabase.CollectionPermissionLevelWrite {
+	switch metabase.CollectionPermissionLevel(permission) {
+	case metabase.CollectionPermissionLevelNone, metabase.CollectionPermissionLevelRead, metabase.CollectionPermissionLevelWrite:
+	default:
 		diags.AddAttributeError(
 			path.Root("permission"),
 			"Invalid collection permission.",
-			fmt.Sprintf("The permission must be either %q or %q, got: %q.", metabase.CollectionPermissionLevelRead, metabase.CollectionPermissionLevelWrite, permission),
+			fmt.Sprintf("The permission must be %q, %q or %q, got: %q.", metabase.CollectionPermissionLevelNone, metabase.CollectionPermissionLevelRead, metabase.CollectionPermissionLevelWrite, permission),
 		)
 	}
 
@@ -168,30 +170,30 @@ func updateCollectionPermission(ctx context.Context, client *metabase.ClientWith
 // reported as a diagnostic.
 var errCollectionGraphNotRead = errors.New("the collection graph could not be read")
 
-// Updates the model from the collection graph returned by the Metabase API.
-// Returns `false` if the graph does not grant any permission for the model's group and collection.
-func (r *CollectionPermissionResource) readCollectionPermission(ctx context.Context, data *CollectionPermissionResourceModel) (bool, diag.Diagnostics) {
+// Updates the model from the collection graph returned by the Metabase API. Metabase omits `none` from the graph, so a
+// pair missing from the graph is read as `none`.
+func (r *CollectionPermissionResource) readCollectionPermission(ctx context.Context, data *CollectionPermissionResourceModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
 	getResp, err := r.client.GetCollectionPermissionsGraphWithResponse(ctx)
 
 	diags.Append(checkMetabaseResponse(getResp, err, []int{200}, "get collection graph")...)
 	if diags.HasError() {
-		return false, diags
+		return diags
 	}
 
 	groupId := data.Group.ValueInt64()
 	collectionId := data.Collection.ValueString()
 
 	permission, ok := getResp.JSON200.Groups[strconv.FormatInt(groupId, 10)][collectionId]
-	if !ok || permission == metabase.CollectionPermissionLevelNone {
-		return false, diags
+	if !ok {
+		permission = metabase.CollectionPermissionLevelNone
 	}
 
 	data.Id = types.StringValue(makeCollectionPermissionId(groupId, collectionId))
 	data.Permission = types.StringValue(string(permission))
 
-	return true, diags
+	return diags
 }
 
 // Sends the permission defined in the plan to Metabase, and updates the plan with the value returned by Metabase.
@@ -212,17 +214,7 @@ func (r *CollectionPermissionResource) writeCollectionPermission(ctx context.Con
 		return diags
 	}
 
-	found, readDiags := r.readCollectionPermission(ctx, data)
-	diags.Append(readDiags...)
-	if diags.HasError() {
-		return diags
-	}
-	if !found {
-		diags.AddError(
-			"Permission not found after update.",
-			fmt.Sprintf("Metabase did not return the permission for group %d and collection %s after updating it.", groupId, collectionId),
-		)
-	}
+	diags.Append(r.readCollectionPermission(ctx, data)...)
 
 	return diags
 }
@@ -251,14 +243,8 @@ func (r *CollectionPermissionResource) Read(ctx context.Context, req resource.Re
 		return
 	}
 
-	found, diags := r.readCollectionPermission(ctx, data)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(r.readCollectionPermission(ctx, data)...)
 	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	if !found {
-		resp.State.RemoveResource(ctx)
 		return
 	}
 
@@ -311,16 +297,8 @@ func (r *CollectionPermissionResource) ImportState(ctx context.Context, req reso
 		Permission: types.StringNull(),
 	}
 
-	found, readDiags := r.readCollectionPermission(ctx, &data)
-	resp.Diagnostics.Append(readDiags...)
+	resp.Diagnostics.Append(r.readCollectionPermission(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
-		return
-	}
-	if !found {
-		resp.Diagnostics.AddError(
-			"Permission not found.",
-			fmt.Sprintf("The collection graph does not grant any permission to group %d on collection %s.", groupId, collectionId),
-		)
 		return
 	}
 
