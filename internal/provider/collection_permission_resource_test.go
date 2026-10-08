@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/flovouin/terraform-provider-metabase/internal/graphlock"
@@ -244,6 +245,54 @@ func TestAccCollectionPermissionResourceValidation(t *testing.T) {
 			{
 				Config:      providerApiKeyConfig + testAccCollectionPermission("invalid", "1", `"root"`, "owner"),
 				ExpectError: regexp.MustCompile("Invalid collection permission"),
+			},
+			{
+				Config:      providerApiKeyConfig + testAccCollectionPermission("missing", "1", `"999999"`, "read"),
+				ExpectError: regexp.MustCompile("Collection not found"),
+			},
+			{
+				Config: providerApiKeyConfig + `
+import {
+  to = metabase_collection_permission.missing
+  id = "1/999999"
+}
+` + testAccCollectionPermission("missing", "1", `"999999"`, "none"),
+				ExpectError: regexp.MustCompile("Collection not found"),
+			},
+		},
+	})
+}
+
+// Archives the collection outside of Terraform. The permission is considered deleted, like the collection, and both are
+// created again.
+func TestAccCollectionPermissionResourceArchivedCollection(t *testing.T) {
+	var collectionId string
+	config := providerApiKeyConfig + testAccCollectionPermissionResource(
+		testAccCollectionPermission("a", "metabase_permissions_group.permission_a.id", "metabase_collection.permission.id", "read"),
+	)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckCollectionPermissionDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccStoreAttribute("metabase_collection.permission", "id", &collectionId),
+				),
+			},
+			{
+				PreConfig: func() {
+					resp, err := testAccMetabaseClient.UpdateCollectionWithBodyWithResponse(context.Background(), collectionId, "application/json", strings.NewReader(`{"archived":true}`))
+					if err != nil || resp.StatusCode() != 200 {
+						t.Fatalf("Failed to archive the collection: %v", err)
+					}
+				},
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckCollectionPermissionExists("metabase_collection_permission.a"),
+					resource.TestCheckResourceAttr("metabase_collection_permission.a", "permission", "read"),
+				),
 			},
 		},
 	})
