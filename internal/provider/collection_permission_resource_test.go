@@ -199,6 +199,24 @@ func TestAccCollectionPermissionResource(t *testing.T) {
 				ImportStateVerify: true,
 			},
 			{
+				// `none` is omitted from the collection graph, and read as such.
+				Config: providerApiKeyConfig + testAccCollectionPermissionResource(
+					testAccCollectionPermission("a", "metabase_permissions_group.permission_a.id", "metabase_collection.permission.id", "write")+
+						testAccCollectionPermission("b", "metabase_permissions_group.permission_b.id", "metabase_collection.permission.id", "none")+
+						testAccCollectionPermission("a_root", "metabase_permissions_group.permission_a.id", `"root"`, "read"),
+				),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckCollectionPermissionExists("metabase_collection_permission.b"),
+					resource.TestCheckResourceAttr("metabase_collection_permission.b", "permission", "none"),
+					checkBystanderIsUntouched,
+				),
+			},
+			{
+				ResourceName:      "metabase_collection_permission.b",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+			{
 				// Removing a resource only resets its own edge. The other edges are left untouched.
 				Config: providerApiKeyConfig + testAccCollectionPermissionResource(
 					testAccCollectionPermission("a", "metabase_permissions_group.permission_a.id", "metabase_collection.permission.id", "read")+
@@ -224,7 +242,7 @@ func TestAccCollectionPermissionResourceValidation(t *testing.T) {
 				ExpectError: regexp.MustCompile("Permissions for the Administrators group cannot be managed"),
 			},
 			{
-				Config:      providerApiKeyConfig + testAccCollectionPermission("none", "1", `"root"`, "none"),
+				Config:      providerApiKeyConfig + testAccCollectionPermission("invalid", "1", `"root"`, "owner"),
 				ExpectError: regexp.MustCompile("Invalid collection permission"),
 			},
 		},

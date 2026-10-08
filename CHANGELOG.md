@@ -2,7 +2,7 @@
 
 NEW FEATURES:
 
-- Add the `metabase_database_permission` and `metabase_collection_permission` resources, which each manage a single (group, database) or (group, collection) pair of the permissions graph or the collection graph, and leave all other pairs untouched. Unlike the `metabase_permissions_graph` and `metabase_collection_graph` resources, they can coexist with permissions set in the Metabase interface, much like the `google_*_iam_member` resources compared to `google_*_iam_policy`. Deleting a resource revokes the permissions of its pair, like removing the pair from the graph resources.
+- Add the `metabase_database_permission` and `metabase_collection_permission` resources, which each manage a single (group, database) or (group, collection) pair of the permissions graph or the collection graph, and leave all other pairs untouched. Unlike the `metabase_permissions_graph` and `metabase_collection_graph` resources, they can coexist with permissions set in the Metabase interface, much like the `google_*_iam_member` resources compared to `google_*_iam_policy`. Deleting a resource revokes the permissions of its pair, like removing the pair from the graph resources. A collection permission can be set to `none`, e.g. to make sure a group has no access to a collection, as new collections inherit the permissions of their parent collection.
 
 BUG FIXES:
 

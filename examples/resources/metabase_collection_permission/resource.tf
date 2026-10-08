@@ -22,3 +22,11 @@ resource "metabase_collection_permission" "business_stakeholders_root" {
   collection = "root"
   permission = "read"
 }
+
+# New collections inherit the permissions of their parent collection. `none` makes sure the All Users group has no access
+# to this collection, whatever its permission on the root collection.
+resource "metabase_collection_permission" "all_users_reports" {
+  group      = 1
+  collection = metabase_collection.business_reports.id
+  permission = "none"
+}
