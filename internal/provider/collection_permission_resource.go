@@ -54,7 +54,7 @@ Unlike the ` + "`metabase_collection_graph`" + ` resource, which manages the ent
 
 Each change reads the current revision of the collection graph and sends only the managed edge to Metabase. Changes made by the provider are performed one at a time, along with the creation and update of collections.
 
-The permission can be set to ` + "`none`" + `, e.g. to make sure a group has no access to a collection, as new collections inherit the permissions of their parent collection. Metabase omits ` + "`none`" + ` from the collection graph, so a pair missing from the graph (e.g. for an archived collection) is read as ` + "`none`" + `.
+The permission can be set to ` + "`none`" + `, e.g. to make sure a group has no access to a collection, as new collections inherit the permissions of their parent collection. Metabase omits ` + "`none`" + ` from the collection graph, so a pair missing from the graph is read as ` + "`none`" + `. When the collection is archived, the resource is considered deleted, like the ` + "`metabase_collection`" + ` resource.
 
 When the resource is deleted, the permission is set to ` + "`none`" + `, which is the same value used by the ` + "`metabase_collection_graph`" + ` resource when removing an edge.
 
@@ -170,6 +170,44 @@ func updateCollectionPermission(ctx context.Context, client *metabase.ClientWith
 // reported as a diagnostic.
 var errCollectionGraphNotRead = errors.New("the collection graph could not be read")
 
+// Returns whether the given collection exists. Archived collections are considered deleted, like by the
+// `metabase_collection` resource. Metabase omits them from the collection graph, and rejects the permissions of collections
+// which do not exist.
+func (r *CollectionPermissionResource) collectionExists(ctx context.Context, collectionId string) (bool, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	if collectionId == "root" {
+		return true, diags
+	}
+
+	getResp, err := r.client.GetCollectionWithResponse(ctx, collectionId)
+
+	diags.Append(checkMetabaseResponse(getResp, err, []int{200, 404}, "get collection")...)
+	if diags.HasError() {
+		return false, diags
+	}
+
+	if getResp.StatusCode() == 404 {
+		return false, diags
+	}
+
+	return getResp.JSON200.Archived == nil || !*getResp.JSON200.Archived, diags
+}
+
+// Returns an error if the given collection does not exist (see `collectionExists`).
+func (r *CollectionPermissionResource) checkCollectionExists(ctx context.Context, collectionId string) diag.Diagnostics {
+	exists, diags := r.collectionExists(ctx, collectionId)
+	if !diags.HasError() && !exists {
+		diags.AddAttributeError(
+			path.Root("collection"),
+			"Collection not found.",
+			fmt.Sprintf("The collection %s does not exist, or is archived.", collectionId),
+		)
+	}
+
+	return diags
+}
+
 // Updates the model from the collection graph returned by the Metabase API. Metabase omits `none` from the graph, so a
 // pair missing from the graph is read as `none`.
 func (r *CollectionPermissionResource) readCollectionPermission(ctx context.Context, data *CollectionPermissionResourceModel) diag.Diagnostics {
@@ -209,6 +247,11 @@ func (r *CollectionPermissionResource) writeCollectionPermission(ctx context.Con
 		return diags
 	}
 
+	diags.Append(r.checkCollectionExists(ctx, collectionId)...)
+	if diags.HasError() {
+		return diags
+	}
+
 	diags.Append(updateCollectionPermission(ctx, r.client, r.collectionGraph, groupId, collectionId, metabase.CollectionPermissionLevel(data.Permission.ValueString()))...)
 	if diags.HasError() {
 		return diags
@@ -240,6 +283,17 @@ func (r *CollectionPermissionResource) Read(ctx context.Context, req resource.Re
 
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	exists, diags := r.collectionExists(ctx, data.Collection.ValueString())
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if !exists {
+		resp.State.RemoveResource(ctx)
 		return
 	}
 
@@ -275,6 +329,13 @@ func (r *CollectionPermissionResource) Delete(ctx context.Context, req resource.
 		return
 	}
 
+	// There is no permission to remove when the collection no longer exists.
+	exists, diags := r.collectionExists(ctx, data.Collection.ValueString())
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() || !exists {
+		return
+	}
+
 	// Like when an edge is removed from the `metabase_collection_graph` resource, the permission is set to `none`.
 	resp.Diagnostics.Append(updateCollectionPermission(ctx, r.client, r.collectionGraph, data.Group.ValueInt64(), data.Collection.ValueString(), metabase.CollectionPermissionLevelNone)...)
 }
@@ -287,6 +348,11 @@ func (r *CollectionPermissionResource) ImportState(ctx context.Context, req reso
 	}
 
 	resp.Diagnostics.Append(checkGroupIsNotAdministrators(groupId)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	resp.Diagnostics.Append(r.checkCollectionExists(ctx, collectionId)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
