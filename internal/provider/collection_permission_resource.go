@@ -198,81 +198,13 @@ func updateCollectionPermission(ctx context.Context, client *metabase.ClientWith
 // reported as a diagnostic.
 var errCollectionGraphNotRead = errors.New("the collection graph could not be read")
 
-// The status of a collection, which defines whether its permissions can be managed.
-type collectionStatus int
-
-const (
-	// The collection exists, is not archived, and is not personal. Its permissions can be managed.
-	collectionStatusActive collectionStatus = iota
-	// The collection does not exist, or is archived. Archived collections are considered deleted, like by the
-	// `metabase_collection` resource.
-	collectionStatusMissing
-	// The collection is personal, or is inside a personal collection. Its permissions are fixed, and Metabase ignores
-	// them when updating the graph.
-	collectionStatusPersonal
-)
-
-// Returns the status of the given collection. Metabase omits the missing and personal
-// collections from the collection graph, so their pairs could not be told apart from `none`.
+// Returns whether the resource is considered deleted, because its group or its collection no longer exists, or because
+// its collection was moved inside a personal collection, which fixes its permissions. Archived collections are
+// considered deleted, like by the `metabase_collection` resource.
 //
 // TODO: Archiving a collection moves it to the trash, which can be restored. Its permissions are kept, and still define
 // who can see and restore it from the trash, but they can no longer be managed by this resource. They are not part of
 // the collection graph, so they cannot be read, although Metabase accepts updating them.
-func getCollectionStatus(ctx context.Context, client *metabase.ClientWithResponses, collectionId string) (collectionStatus, diag.Diagnostics) {
-	var diags diag.Diagnostics
-
-	// The root collection always exists, and is not personal.
-	if collectionId == "root" {
-		return collectionStatusActive, diags
-	}
-
-	getResp, err := client.GetCollectionWithResponse(ctx, collectionId)
-
-	diags.Append(checkMetabaseResponse(getResp, err, []int{200, 404}, "get collection")...)
-	if diags.HasError() {
-		return collectionStatusMissing, diags
-	}
-
-	if getResp.StatusCode() == 404 || (getResp.JSON200.Archived != nil && *getResp.JSON200.Archived) {
-		return collectionStatusMissing, diags
-	}
-
-	if getResp.JSON200.IsPersonal != nil && *getResp.JSON200.IsPersonal {
-		return collectionStatusPersonal, diags
-	}
-
-	return collectionStatusActive, diags
-}
-
-// Returns an error if the permissions of the given collection cannot be managed (see `getCollectionStatus`).
-func checkCollectionStatus(ctx context.Context, client *metabase.ClientWithResponses, collectionId string) diag.Diagnostics {
-	status, diags := getCollectionStatus(ctx, client, collectionId)
-	if diags.HasError() {
-		return diags
-	}
-
-	switch status {
-	case collectionStatusActive:
-		// The permissions of the collection can be managed.
-	case collectionStatusMissing:
-		diags.AddAttributeError(
-			path.Root("collection"),
-			"Collection not found.",
-			fmt.Sprintf("The collection %s does not exist, or is archived.", collectionId),
-		)
-	case collectionStatusPersonal:
-		diags.AddAttributeError(
-			path.Root("collection"),
-			"Personal collection.",
-			fmt.Sprintf("The collection %s is a personal collection, or is inside one. The permissions of personal collections are fixed, and cannot be changed.", collectionId),
-		)
-	}
-
-	return diags
-}
-
-// Returns whether the resource is considered deleted, because its group or its collection no longer exists, or because
-// its collection was moved inside a personal collection, which fixes its permissions.
 func (r *CollectionPermissionResource) isDeleted(ctx context.Context, data CollectionPermissionResourceModel) (bool, diag.Diagnostics) {
 	groupExists, diags := getPermissionsGroupExists(ctx, r.client, data.Group.ValueInt64())
 	if diags.HasError() || !groupExists {
