@@ -204,25 +204,26 @@ func TestAccCollectionPermissionResource(t *testing.T) {
 				// `none` is omitted from the collection graph, and read as such.
 				Config: providerApiKeyConfig + testAccCollectionPermissionResource(
 					testAccCollectionPermission("a", "metabase_permissions_group.permission_a.id", "metabase_collection.permission.id", "write")+
-						testAccCollectionPermission("b", "metabase_permissions_group.permission_b.id", "metabase_collection.permission.id", "none")+
-						testAccCollectionPermission("a_root", "metabase_permissions_group.permission_a.id", `"root"`, "read"),
+						testAccCollectionPermission("b", "metabase_permissions_group.permission_b.id", "metabase_collection.permission.id", "read")+
+						testAccCollectionPermission("a_root", "metabase_permissions_group.permission_a.id", `"root"`, "none"),
 				),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					testAccCheckCollectionPermissionExists("metabase_collection_permission.b"),
-					resource.TestCheckResourceAttr("metabase_collection_permission.b", "permission", "none"),
+					testAccCheckCollectionPermissionExists("metabase_collection_permission.a_root"),
+					resource.TestCheckResourceAttr("metabase_collection_permission.a_root", "permission", "none"),
 					checkBystanderIsUntouched,
 				),
 			},
 			{
-				ResourceName:      "metabase_collection_permission.b",
+				ResourceName:      "metabase_collection_permission.a_root",
 				ImportState:       true,
 				ImportStateVerify: true,
 			},
 			{
-				// Removing a resource only resets its own edge. The other edges are left untouched.
+				// Removing a resource only resets its own edge, which grants `read` until then. The other edges are left
+				// untouched.
 				Config: providerApiKeyConfig + testAccCollectionPermissionResource(
 					testAccCollectionPermission("a", "metabase_permissions_group.permission_a.id", "metabase_collection.permission.id", "read")+
-						testAccCollectionPermission("a_root", "metabase_permissions_group.permission_a.id", `"root"`, "read"),
+						testAccCollectionPermission("a_root", "metabase_permissions_group.permission_a.id", `"root"`, "none"),
 				),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccCheckCollectionPermissionExists("metabase_collection_permission.a"),
