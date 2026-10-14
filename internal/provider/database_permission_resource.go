@@ -61,7 +61,9 @@ Unlike the ` + "`metabase_permissions_graph`" + ` resource, which manages the en
 
 Each change reads the current revision of the permissions graph and sends only the managed edge to Metabase. Changes made by the provider are performed one at a time.
 
-~> **Warning:** Metabase grants default permissions when a database or a group is created, e.g. full access to the All Users group on a new database. This resource only manages its own (group, database) pair, so it cannot see those default permissions. Managing the permissions of the All Users group explicitly is recommended.
+~> **Warning:** Metabase grants default permissions when a database or a group is created, e.g. full access to the All Users group on a new database. This resource only manages its own (group, database) pair, so it cannot see those default permissions. Managing the permissions of the All Users group explicitly is recommended, e.g. with the lowest permissions.
+
+The lowest permissions can be declared to make sure a group has no access to a database, beyond viewing the data of the questions it has access to: ` + "`view_data`" + ` set to ` + "`unrestricted`" + `, ` + "`create_queries`" + ` set to ` + "`no`" + `, and ` + "`download`" + ` set to ` + "`none`" + `. Unlike the ` + "`metabase_permissions_graph`" + ` resource, which considers the pairs with the lowest permissions absent, this resource manages such a pair like any other.
 
 The ` + "`download`" + `, ` + "`data_model`" + ` and ` + "`details`" + ` permissions are optional. When they are not set in the configuration, they are never sent to Metabase, and the current values are reported.
 

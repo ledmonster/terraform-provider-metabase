@@ -21,3 +21,15 @@ resource "metabase_database_permission" "data_analysts_bigquery" {
   view_data      = "unrestricted"
   create_queries = "query-builder-and-native"
 }
+
+# Metabase grants the All Users group full access to new databases. The lowest permissions make sure it can only view the
+# data of the questions it has access to.
+resource "metabase_database_permission" "all_users_bigquery" {
+  group          = 1
+  database       = metabase_database.bigquery.id
+  view_data      = "unrestricted"
+  create_queries = "no"
+  download = {
+    schemas = "none"
+  }
+}

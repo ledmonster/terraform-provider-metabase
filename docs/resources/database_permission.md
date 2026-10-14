@@ -7,7 +7,8 @@ description: |-
   Unlike the metabase_permissions_graph resource, which manages the entire permissions graph and resets the permissions it does not define, this resource only manages a single (group, database) edge of the graph. All other permissions are left untouched, whether they are managed by other metabase_database_permission resources, or set outside of Terraform (e.g. in the Metabase interface). This is similar to the relationship between the google_*_iam_member and google_*_iam_policy resources of the Google provider.
   ~> Warning: Do not use this resource together with a metabase_permissions_graph resource, and do not define the same (group, database) pair in several metabase_database_permission resources. They would overwrite each other's permissions.
   Each change reads the current revision of the permissions graph and sends only the managed edge to Metabase. Changes made by the provider are performed one at a time.
-  ~> Warning: Metabase grants default permissions when a database or a group is created, e.g. full access to the All Users group on a new database. This resource only manages its own (group, database) pair, so it cannot see those default permissions. Managing the permissions of the All Users group explicitly is recommended.
+  ~> Warning: Metabase grants default permissions when a database or a group is created, e.g. full access to the All Users group on a new database. This resource only manages its own (group, database) pair, so it cannot see those default permissions. Managing the permissions of the All Users group explicitly is recommended, e.g. with the lowest permissions.
+  The lowest permissions can be declared to make sure a group has no access to a database, beyond viewing the data of the questions it has access to: view_data set to unrestricted, create_queries set to no, and download set to none. Unlike the metabase_permissions_graph resource, which considers the pairs with the lowest permissions absent, this resource manages such a pair like any other.
   The download, data_model and details permissions are optional. When they are not set in the configuration, they are never sent to Metabase, and the current values are reported.
   Metabase never removes a (group, database) pair from the graph. When the resource is deleted, its permissions are revoked, like when a pair is removed from the metabase_permissions_graph resource: view_data is set to unrestricted, and create_queries, download, data_model and details are revoked.
   Metabase can return edges which do not define the view_data permission (e.g. a group with only the data_model permission). Such edges cannot be imported, and are considered missing: the resource will be created again by setting its permissions.
@@ -24,7 +25,9 @@ Unlike the `metabase_permissions_graph` resource, which manages the entire permi
 
 Each change reads the current revision of the permissions graph and sends only the managed edge to Metabase. Changes made by the provider are performed one at a time.
 
-~> **Warning:** Metabase grants default permissions when a database or a group is created, e.g. full access to the All Users group on a new database. This resource only manages its own (group, database) pair, so it cannot see those default permissions. Managing the permissions of the All Users group explicitly is recommended.
+~> **Warning:** Metabase grants default permissions when a database or a group is created, e.g. full access to the All Users group on a new database. This resource only manages its own (group, database) pair, so it cannot see those default permissions. Managing the permissions of the All Users group explicitly is recommended, e.g. with the lowest permissions.
+
+The lowest permissions can be declared to make sure a group has no access to a database, beyond viewing the data of the questions it has access to: `view_data` set to `unrestricted`, `create_queries` set to `no`, and `download` set to `none`. Unlike the `metabase_permissions_graph` resource, which considers the pairs with the lowest permissions absent, this resource manages such a pair like any other.
 
 The `download`, `data_model` and `details` permissions are optional. When they are not set in the configuration, they are never sent to Metabase, and the current values are reported.
 
@@ -59,6 +62,18 @@ resource "metabase_database_permission" "data_analysts_bigquery" {
   database       = metabase_database.bigquery.id
   view_data      = "unrestricted"
   create_queries = "query-builder-and-native"
+}
+
+# Metabase grants the All Users group full access to new databases. The lowest permissions make sure it can only view the
+# data of the questions it has access to.
+resource "metabase_database_permission" "all_users_bigquery" {
+  group          = 1
+  database       = metabase_database.bigquery.id
+  view_data      = "unrestricted"
+  create_queries = "no"
+  download = {
+    schemas = "none"
+  }
 }
 ```
 
