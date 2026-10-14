@@ -293,6 +293,12 @@ func TestAccDatabasePermissionResourceAdministrators(t *testing.T) {
 				Config:      providerApiKeyConfig + testAccDatabasePermission("admin", "2", "query-builder"),
 				ExpectError: regexp.MustCompile("Permissions for the Administrators group cannot be managed"),
 			},
+			{
+				// A missing group is reported by the plan, rather than failing the update with a foreign key violation.
+				Config:      providerApiKeyConfig + testAccDatabasePermission("missing_group", "999999", "query-builder"),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile("Group not found"),
+			},
 		},
 	})
 }
@@ -495,6 +501,13 @@ func newFakeGraphServer(t *testing.T) (*fakeGraphServer, *metabase.ClientWithRes
 func (f *fakeGraphServer) handle(w http.ResponseWriter, r *http.Request) {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
+
+	// Every permissions group exists.
+	if groupId, ok := strings.CutPrefix(r.URL.Path, "/permissions/group/"); ok && r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id": %s, "name": "Group %s"}`, groupId, groupId)
+		return
+	}
 
 	graph, ok := f.graphs[r.URL.Path]
 	if !ok {

@@ -155,8 +155,20 @@ func (r *DatabasePermissionResource) ValidateConfig(ctx context.Context, req res
 // (see the `UseStateForUnknown` plan modifiers). However Metabase may change them when the main permissions change, in
 // which case they are marked as unknown instead.
 func (r *DatabasePermissionResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	// Nothing to do when creating or deleting the resource.
-	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+	// Nothing to do when deleting the resource.
+	if req.Plan.Raw.IsNull() {
+		return
+	}
+
+	// The group can only change when the resource is created, as it requires a replacement. It is checked by the plan,
+	// such that a wrong ID is reported before the apply, unless it is unknown (e.g. when the group is created in the same
+	// apply), in which case it is checked when creating the resource.
+	if req.State.Raw.IsNull() {
+		var plan DatabasePermissionResourceModel
+		resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+		if !resp.Diagnostics.HasError() && !plan.Group.IsUnknown() {
+			resp.Diagnostics.Append(checkPermissionsGroupExists(ctx, r.client, plan.Group.ValueInt64())...)
+		}
 		return
 	}
 
@@ -387,6 +399,11 @@ func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Contex
 		return nil, diags
 	}
 
+	diags.Append(checkPermissionsGroupExists(ctx, r.client, groupId)...)
+	if diags.HasError() {
+		return nil, diags
+	}
+
 	edge := data.toEdge()
 	configEdge := config.toEdge()
 	edge.Download = configEdge.Download
@@ -534,6 +551,11 @@ func (r *DatabasePermissionResource) ImportState(ctx context.Context, req resour
 	}
 
 	resp.Diagnostics.Append(checkGroupIsNotAdministrators(groupId)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	resp.Diagnostics.Append(checkPermissionsGroupExists(ctx, r.client, groupId)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}

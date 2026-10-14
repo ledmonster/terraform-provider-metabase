@@ -248,12 +248,21 @@ func TestAccCollectionPermissionResourceValidation(t *testing.T) {
 				ExpectError: regexp.MustCompile("Invalid collection permission"),
 			},
 			{
+				// Missing IDs are reported by the plan.
 				Config:      providerApiKeyConfig + testAccCollectionPermission("missing", "1", `"999999"`, "read"),
+				PlanOnly:    true,
 				ExpectError: regexp.MustCompile("Collection not found"),
 			},
 			{
 				Config:      providerApiKeyConfig + testAccCollectionPermission("missing_group", "999999", `"root"`, "read"),
+				PlanOnly:    true,
 				ExpectError: regexp.MustCompile("Group not found"),
+			},
+			{
+				// Both errors are reported at once.
+				Config:      providerApiKeyConfig + testAccCollectionPermission("missing_both", "999999", `"999999"`, "read"),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`(?s)Group not found.*Collection not found`),
 			},
 			{
 				Config: providerApiKeyConfig + `
@@ -338,6 +347,7 @@ func TestAccCollectionPermissionResourcePersonalCollection(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				Config:      providerApiKeyConfig + testAccCollectionPermission("personal", "1", fmt.Sprintf("%q", personalCollectionId), "read"),
+				PlanOnly:    true,
 				ExpectError: regexp.MustCompile("Personal collection"),
 			},
 		},
