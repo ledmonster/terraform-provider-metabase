@@ -54,7 +54,9 @@ Unlike the ` + "`metabase_collection_graph`" + ` resource, which manages the ent
 
 Each change reads the current revision of the collection graph and sends only the managed edge to Metabase. Changes made by the provider are performed one at a time, along with the creation and update of collections.
 
-The permission can be set to ` + "`none`" + `, e.g. to make sure a group has no access to a collection, as new collections inherit the permissions of their parent collection. Metabase omits ` + "`none`" + ` from the collection graph, so a pair missing from the graph is read as ` + "`none`" + `. When the collection is archived, the resource is considered deleted, like the ` + "`metabase_collection`" + ` resource.
+The permission can be set to ` + "`none`" + `, e.g. to make sure a group has no access to a collection, as new collections inherit the permissions of their parent collection. Metabase omits ` + "`none`" + ` from the collection graph, so a pair missing from the graph is read as ` + "`none`" + `. When the group or the collection is deleted, or when the collection is archived, the resource is considered deleted, like the ` + "`metabase_collection`" + ` resource.
+
+The permissions of personal collections, and of the collections inside them, are fixed and cannot be managed.
 
 When the resource is deleted, the permission is set to ` + "`none`" + `, which is the same value used by the ` + "`metabase_collection_graph`" + ` resource when removing an edge.
 
@@ -170,46 +172,62 @@ func updateCollectionPermission(ctx context.Context, client *metabase.ClientWith
 // reported as a diagnostic.
 var errCollectionGraphNotRead = errors.New("the collection graph could not be read")
 
-// Returns whether the given collection exists. Archived collections are considered deleted, like by the
-// `metabase_collection` resource. Metabase omits them from the collection graph, and rejects the permissions of collections
-// which do not exist.
+// Checks that the permission of the given group on the given collection can be managed by the resource. Returns errors
+// if the group or the collection does not exist, or if the collection is personal, separately from the errors of the
+// Metabase API. Metabase omits these pairs from the collection graph, so they could not be told apart from `none`.
+//
+// Archived collections are considered deleted, like by the `metabase_collection` resource.
 //
 // TODO: Archiving a collection moves it to the trash, which can be restored. Its permissions are kept, and still define
 // who can see and restore it from the trash, but they can no longer be managed by this resource. They are not part of
 // the collection graph, so they cannot be read, although Metabase accepts updating them.
-func (r *CollectionPermissionResource) collectionExists(ctx context.Context, collectionId string) (bool, diag.Diagnostics) {
-	var diags diag.Diagnostics
+func (r *CollectionPermissionResource) checkPermissionCanBeManaged(ctx context.Context, groupId int64, collectionId string) (unmanageable diag.Diagnostics, diags diag.Diagnostics) {
+	groupResp, err := r.client.GetPermissionsGroupWithResponse(ctx, int(groupId))
+
+	diags.Append(checkMetabaseResponse(groupResp, err, []int{200, 404}, "get permissions group")...)
+	if diags.HasError() {
+		return unmanageable, diags
+	}
+
+	if groupResp.StatusCode() == 404 {
+		unmanageable.AddAttributeError(
+			path.Root("group"),
+			"Group not found.",
+			fmt.Sprintf("The permissions group %d does not exist.", groupId),
+		)
+		return unmanageable, diags
+	}
 
 	if collectionId == "root" {
-		return true, diags
+		return unmanageable, diags
 	}
 
-	getResp, err := r.client.GetCollectionWithResponse(ctx, collectionId)
+	collectionResp, err := r.client.GetCollectionWithResponse(ctx, collectionId)
 
-	diags.Append(checkMetabaseResponse(getResp, err, []int{200, 404}, "get collection")...)
+	diags.Append(checkMetabaseResponse(collectionResp, err, []int{200, 404}, "get collection")...)
 	if diags.HasError() {
-		return false, diags
+		return unmanageable, diags
 	}
 
-	if getResp.StatusCode() == 404 {
-		return false, diags
-	}
-
-	return getResp.JSON200.Archived == nil || !*getResp.JSON200.Archived, diags
-}
-
-// Returns an error if the given collection does not exist (see `collectionExists`).
-func (r *CollectionPermissionResource) checkCollectionExists(ctx context.Context, collectionId string) diag.Diagnostics {
-	exists, diags := r.collectionExists(ctx, collectionId)
-	if !diags.HasError() && !exists {
-		diags.AddAttributeError(
+	if collectionResp.StatusCode() == 404 || (collectionResp.JSON200.Archived != nil && *collectionResp.JSON200.Archived) {
+		unmanageable.AddAttributeError(
 			path.Root("collection"),
 			"Collection not found.",
 			fmt.Sprintf("The collection %s does not exist, or is archived.", collectionId),
 		)
+		return unmanageable, diags
 	}
 
-	return diags
+	// Metabase ignores the permissions of personal collections when updating the graph.
+	if collectionResp.JSON200.IsPersonal != nil && *collectionResp.JSON200.IsPersonal {
+		unmanageable.AddAttributeError(
+			path.Root("collection"),
+			"Personal collection.",
+			fmt.Sprintf("The collection %s is a personal collection, or is inside one. The permissions of personal collections are fixed, and cannot be changed.", collectionId),
+		)
+	}
+
+	return unmanageable, diags
 }
 
 // Updates the model from the collection graph returned by the Metabase API. Metabase omits `none` from the graph, so a
@@ -251,7 +269,9 @@ func (r *CollectionPermissionResource) writeCollectionPermission(ctx context.Con
 		return diags
 	}
 
-	diags.Append(r.checkCollectionExists(ctx, collectionId)...)
+	unmanageable, checkDiags := r.checkPermissionCanBeManaged(ctx, groupId, collectionId)
+	diags.Append(checkDiags...)
+	diags.Append(unmanageable...)
 	if diags.HasError() {
 		return diags
 	}
@@ -290,13 +310,14 @@ func (r *CollectionPermissionResource) Read(ctx context.Context, req resource.Re
 		return
 	}
 
-	exists, diags := r.collectionExists(ctx, data.Collection.ValueString())
+	// The resource is considered deleted when its group or its collection no longer exists.
+	unmanageable, diags := r.checkPermissionCanBeManaged(ctx, data.Group.ValueInt64(), data.Collection.ValueString())
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	if !exists {
+	if unmanageable.HasError() {
 		resp.State.RemoveResource(ctx)
 		return
 	}
@@ -333,10 +354,10 @@ func (r *CollectionPermissionResource) Delete(ctx context.Context, req resource.
 		return
 	}
 
-	// There is no permission to remove when the collection no longer exists.
-	exists, diags := r.collectionExists(ctx, data.Collection.ValueString())
+	// There is no permission to remove when the group or the collection no longer exists.
+	unmanageable, diags := r.checkPermissionCanBeManaged(ctx, data.Group.ValueInt64(), data.Collection.ValueString())
 	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() || !exists {
+	if resp.Diagnostics.HasError() || unmanageable.HasError() {
 		return
 	}
 
@@ -356,7 +377,9 @@ func (r *CollectionPermissionResource) ImportState(ctx context.Context, req reso
 		return
 	}
 
-	resp.Diagnostics.Append(r.checkCollectionExists(ctx, collectionId)...)
+	unmanageable, diags := r.checkPermissionCanBeManaged(ctx, groupId, collectionId)
+	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(unmanageable...)
 	if resp.Diagnostics.HasError() {
 		return
 	}

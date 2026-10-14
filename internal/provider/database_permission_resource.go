@@ -396,6 +396,10 @@ func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Contex
 
 	// The response to the update only contains the edges that were sent, which is why the graph is read again.
 	// The permissions have just been written, so the values from the plan are kept.
+	//
+	// TODO: The JSON values from the plan are kept even if Metabase stored different permissions, rather than the same
+	// permissions in a different shape. The response is then stored as the written permissions, so the difference is
+	// never reported. `metabase_permissions_graph` keeps the JSON values of its model in the same way.
 	found, written, readDiags := r.readDatabasePermissions(ctx, data, nil)
 	diags.Append(readDiags...)
 	if diags.HasError() {

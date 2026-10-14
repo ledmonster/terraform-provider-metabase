@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -251,6 +252,10 @@ func TestAccCollectionPermissionResourceValidation(t *testing.T) {
 				ExpectError: regexp.MustCompile("Collection not found"),
 			},
 			{
+				Config:      providerApiKeyConfig + testAccCollectionPermission("missing_group", "999999", `"root"`, "read"),
+				ExpectError: regexp.MustCompile("Group not found"),
+			},
+			{
 				Config: providerApiKeyConfig + `
 import {
   to = metabase_collection_permission.missing
@@ -293,6 +298,78 @@ func TestAccCollectionPermissionResourceArchivedCollection(t *testing.T) {
 					testAccCheckCollectionPermissionExists("metabase_collection_permission.a"),
 					resource.TestCheckResourceAttr("metabase_collection_permission.a", "permission", "read"),
 				),
+			},
+		},
+	})
+}
+
+// Returns the ID of a personal collection, from the collections visible to the test user.
+func testAccGetPersonalCollectionId(t *testing.T) string {
+	t.Helper()
+
+	resp, err := testAccMetabaseClient.ListCollectionsWithResponse(context.Background(), &metabase.ListCollectionsParams{})
+	if err != nil || resp.StatusCode() != 200 {
+		t.Fatalf("Failed to list the collections: %v", err)
+	}
+
+	for _, c := range *resp.JSON200 {
+		if c.PersonalOwnerId != nil {
+			id, err := c.Id.AsCollectionId1()
+			if err == nil {
+				return strconv.Itoa(id)
+			}
+		}
+	}
+
+	t.Fatalf("No personal collection found.")
+	return ""
+}
+
+// The permissions of personal collections are fixed, and Metabase ignores them when updating the collection graph.
+func TestAccCollectionPermissionResourcePersonalCollection(t *testing.T) {
+	if os.Getenv(resource.EnvTfAcc) == "" {
+		t.Skipf("Acceptance tests skipped unless env '%s' set", resource.EnvTfAcc)
+	}
+
+	personalCollectionId := testAccGetPersonalCollectionId(t)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      providerApiKeyConfig + testAccCollectionPermission("personal", "1", fmt.Sprintf("%q", personalCollectionId), "read"),
+				ExpectError: regexp.MustCompile("Personal collection"),
+			},
+		},
+	})
+}
+
+// Deletes a group which is not managed by Terraform. Metabase omits the pairs of a deleted group from the collection
+// graph, like the pairs set to `none`. The resource is considered deleted rather than read as `none`, so the next apply
+// tries to create it again, and fails.
+func TestAccCollectionPermissionResourceDeletedGroup(t *testing.T) {
+	if os.Getenv(resource.EnvTfAcc) == "" {
+		t.Skipf("Acceptance tests skipped unless env '%s' set", resource.EnvTfAcc)
+	}
+
+	groupId := testAccCreateBystanderGroup(t, "🗑️ Collection permission deleted group")
+	config := providerApiKeyConfig + testAccCollectionPermission("deleted", strconv.Itoa(groupId), `"root"`, "none")
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+			},
+			{
+				PreConfig: func() {
+					resp, err := testAccMetabaseClient.DeletePermissionsGroupWithResponse(context.Background(), groupId)
+					if err != nil || resp.StatusCode() != 204 {
+						t.Fatalf("Failed to delete the group: %v", err)
+					}
+				},
+				Config:      config,
+				ExpectError: regexp.MustCompile("Group not found"),
 			},
 		},
 	})
