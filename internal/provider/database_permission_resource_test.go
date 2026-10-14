@@ -92,7 +92,7 @@ func testAccGetCreateQueries(groupId string, databaseId string) (string, error) 
 }
 
 // Checks that the `create-queries` permission in Metabase matches the one from the resource in the state.
-func testAccCheckDatabasePermissionExists(resourceName string) resource.TestCheckFunc {
+func testAccCheckDatabasePermissionMatchesState(resourceName string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		rs, ok := s.RootModule().Resources[resourceName]
 		if !ok {
@@ -198,8 +198,8 @@ func TestAccDatabasePermissionResource(t *testing.T) {
 						testAccDatabasePermission("b", "metabase_permissions_group.permission_b.id", "query-builder-and-native"),
 				),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					testAccCheckDatabasePermissionExists("metabase_database_permission.a"),
-					testAccCheckDatabasePermissionExists("metabase_database_permission.b"),
+					testAccCheckDatabasePermissionMatchesState("metabase_database_permission.a"),
+					testAccCheckDatabasePermissionMatchesState("metabase_database_permission.b"),
 					resource.TestCheckResourceAttrPair("metabase_database_permission.a", "group", "metabase_permissions_group.permission_a", "id"),
 					resource.TestCheckResourceAttr("metabase_database_permission.a", "database", "1"),
 					resource.TestCheckResourceAttr("metabase_database_permission.a", "view_data", "unrestricted"),
@@ -220,7 +220,7 @@ func TestAccDatabasePermissionResource(t *testing.T) {
 					testAccDatabasePermission("a", "metabase_permissions_group.permission_a.id", "query-builder-and-native"),
 				),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					testAccCheckDatabasePermissionExists("metabase_database_permission.a"),
+					testAccCheckDatabasePermissionMatchesState("metabase_database_permission.a"),
 					resource.TestCheckResourceAttr("metabase_database_permission.a", "create_queries", "query-builder-and-native"),
 					func(s *terraform.State) error {
 						return testAccCheckRevokedDatabasePermissions(getGroupB(), func(*terraform.State) (string, error) { return "1", nil })(s)
@@ -377,8 +377,8 @@ func TestAccGraphEdgesParallel(t *testing.T) {
 	checks := []resource.TestCheckFunc{}
 	for i := range count {
 		checks = append(checks,
-			testAccCheckDatabasePermissionExists(fmt.Sprintf("metabase_database_permission.parallel_%d", i)),
-			testAccCheckCollectionPermissionExists(fmt.Sprintf("metabase_collection_permission.parallel_%d", i)),
+			testAccCheckDatabasePermissionMatchesState(fmt.Sprintf("metabase_database_permission.parallel_%d", i)),
+			testAccCheckCollectionPermissionMatchesState(fmt.Sprintf("metabase_collection_permission.parallel_%d", i)),
 		)
 	}
 

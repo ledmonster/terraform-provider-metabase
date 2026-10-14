@@ -34,7 +34,7 @@ func testAccGetCollectionPermission(groupId string, collectionId string) (string
 }
 
 // Checks that the permission in Metabase matches the one from the resource in the state.
-func testAccCheckCollectionPermissionExists(resourceName string) resource.TestCheckFunc {
+func testAccCheckCollectionPermissionMatchesState(resourceName string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		rs, ok := s.RootModule().Resources[resourceName]
 		if !ok {
@@ -200,9 +200,9 @@ func TestAccCollectionPermissionResource(t *testing.T) {
 						testAccCollectionPermission("a_root", "metabase_permissions_group.permission_a.id", `"root"`, "read"),
 				),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					testAccCheckCollectionPermissionExists("metabase_collection_permission.a"),
-					testAccCheckCollectionPermissionExists("metabase_collection_permission.b"),
-					testAccCheckCollectionPermissionExists("metabase_collection_permission.a_root"),
+					testAccCheckCollectionPermissionMatchesState("metabase_collection_permission.a"),
+					testAccCheckCollectionPermissionMatchesState("metabase_collection_permission.b"),
+					testAccCheckCollectionPermissionMatchesState("metabase_collection_permission.a_root"),
 					resource.TestCheckResourceAttrPair("metabase_collection_permission.a", "group", "metabase_permissions_group.permission_a", "id"),
 					resource.TestCheckResourceAttrPair("metabase_collection_permission.a", "collection", "metabase_collection.permission", "id"),
 					resource.TestCheckResourceAttr("metabase_collection_permission.a", "permission", "write"),
@@ -230,7 +230,7 @@ func TestAccCollectionPermissionResource(t *testing.T) {
 						testAccCollectionPermission("a_root", "metabase_permissions_group.permission_a.id", `"root"`, "none"),
 				),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					testAccCheckCollectionPermissionExists("metabase_collection_permission.a_root"),
+					testAccCheckCollectionPermissionMatchesState("metabase_collection_permission.a_root"),
 					resource.TestCheckResourceAttr("metabase_collection_permission.a_root", "permission", "none"),
 					checkBystanderIsUntouched,
 				),
@@ -248,7 +248,7 @@ func TestAccCollectionPermissionResource(t *testing.T) {
 						testAccCollectionPermission("a_root", "metabase_permissions_group.permission_a.id", `"root"`, "none"),
 				),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					testAccCheckCollectionPermissionExists("metabase_collection_permission.a"),
+					testAccCheckCollectionPermissionMatchesState("metabase_collection_permission.a"),
 					resource.TestCheckResourceAttr("metabase_collection_permission.a", "permission", "read"),
 					testAccCheckCollectionPermission(getGroupB, getCollection, string(metabase.CollectionPermissionLevelNone)),
 					checkBystanderIsUntouched,
@@ -327,7 +327,7 @@ func TestAccCollectionPermissionResourceArchivedCollection(t *testing.T) {
 				},
 				Config: config,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					testAccCheckCollectionPermissionExists("metabase_collection_permission.a"),
+					testAccCheckCollectionPermissionMatchesState("metabase_collection_permission.a"),
 					resource.TestCheckResourceAttr("metabase_collection_permission.a", "permission", "read"),
 				),
 			},
