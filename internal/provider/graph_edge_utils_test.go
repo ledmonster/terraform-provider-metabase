@@ -140,6 +140,8 @@ type fakeGraphServer struct {
 	missingGroups map[string]bool
 	// The collections returned by the API, by ID. The other collections do not exist.
 	collections map[string]string
+	// The IDs of the databases which do not exist. All the other databases exist.
+	missingDatabases map[string]bool
 }
 
 type fakeGraph struct {
@@ -155,8 +157,9 @@ func newFakeGraphServer(t *testing.T) (*fakeGraphServer, *metabase.ClientWithRes
 			"/permissions/graph": {groups: map[string]map[string]json.RawMessage{}},
 			"/collection/graph":  {groups: map[string]map[string]json.RawMessage{}},
 		},
-		missingGroups: map[string]bool{},
-		collections:   map[string]string{},
+		missingGroups:    map[string]bool{},
+		collections:      map[string]string{},
+		missingDatabases: map[string]bool{},
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(f.handle))
@@ -181,6 +184,16 @@ func (f *fakeGraphServer) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"id": %s, "name": "Group %s"}`, groupId, groupId)
+		return
+	}
+
+	if databaseId, ok := strings.CutPrefix(r.URL.Path, "/database/"); ok && r.Method == http.MethodGet {
+		if f.missingDatabases[databaseId] {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id": %s, "name": "Database %s", "engine": "postgres", "details": {}}`, databaseId, databaseId)
 		return
 	}
 

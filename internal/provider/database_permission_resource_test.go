@@ -235,7 +235,18 @@ func testAccCheckDatabasePermissionDestroy(s *terraform.State) error {
 	return nil
 }
 
-func TestAccDatabasePermissionResourceAdministrators(t *testing.T) {
+func TestAccDatabasePermissionResourceValidation(t *testing.T) {
+	missingDatabase := func(group string) string {
+		return fmt.Sprintf(`
+resource "metabase_database_permission" "missing_database" {
+  group          = %s
+  database       = 999999
+  view_data      = "unrestricted"
+  create_queries = "no"
+}
+`, group)
+	}
+
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
@@ -248,6 +259,17 @@ func TestAccDatabasePermissionResourceAdministrators(t *testing.T) {
 				Config:      providerApiKeyConfig + testAccDatabasePermission("missing_group", "999999", "query-builder"),
 				PlanOnly:    true,
 				ExpectError: regexp.MustCompile("Group not found"),
+			},
+			{
+				Config:      providerApiKeyConfig + missingDatabase("1"),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile("Database not found"),
+			},
+			{
+				// Both errors are reported at once.
+				Config:      providerApiKeyConfig + missingDatabase("999999"),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`(?s)Group not found.*Database not found`),
 			},
 		},
 	})

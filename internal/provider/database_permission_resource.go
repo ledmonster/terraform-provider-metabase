@@ -186,14 +186,21 @@ func (r *DatabasePermissionResource) ModifyPlan(ctx context.Context, req resourc
 		return
 	}
 
-	// The group can only change when the resource is created, as it requires a replacement. It is checked by the plan,
-	// such that a wrong ID is reported before the apply, unless it is unknown (e.g. when the group is created in the same
-	// apply), in which case it is checked when creating the resource.
+	// The group and the database can only change when the resource is created, as they require a replacement. They are
+	// checked by the plan, such that a wrong ID is reported before the apply, unless it is unknown (e.g. when the group
+	// or the database is created in the same apply), in which case it is checked when creating the resource.
 	if req.State.Raw.IsNull() {
 		var plan DatabasePermissionResourceModel
 		resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-		if !resp.Diagnostics.HasError() && !plan.Group.IsUnknown() {
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		if !plan.Group.IsUnknown() {
 			resp.Diagnostics.Append(checkPermissionsGroupExists(ctx, r.client, plan.Group.ValueInt64())...)
+		}
+		if !plan.Database.IsUnknown() {
+			resp.Diagnostics.Append(checkDatabaseExists(ctx, r.client, plan.Database.ValueInt64())...)
 		}
 		return
 	}
@@ -380,11 +387,6 @@ func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Contex
 		return nil, diags
 	}
 
-	diags.Append(checkPermissionsGroupExists(ctx, r.client, groupId)...)
-	if diags.HasError() {
-		return nil, diags
-	}
-
 	edge := data.toEdge()
 	configEdge := config.toEdge()
 	edge.Download = configEdge.Download
@@ -429,6 +431,14 @@ func (r *DatabasePermissionResource) Create(ctx context.Context, req resource.Cr
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// The group and the database can only change when the resource is created, as they require a replacement. Both are
+	// checked, such that all the errors are reported at once.
+	resp.Diagnostics.Append(checkPermissionsGroupExists(ctx, r.client, data.Group.ValueInt64())...)
+	resp.Diagnostics.Append(checkDatabaseExists(ctx, r.client, data.Database.ValueInt64())...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -540,7 +550,9 @@ func (r *DatabasePermissionResource) ImportState(ctx context.Context, req resour
 		return
 	}
 
+	// Both are checked, such that all the errors are reported at once.
 	resp.Diagnostics.Append(checkPermissionsGroupExists(ctx, r.client, groupId)...)
+	resp.Diagnostics.Append(checkDatabaseExists(ctx, r.client, databaseIdInt)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}

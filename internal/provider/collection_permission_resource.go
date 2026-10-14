@@ -249,13 +249,6 @@ func (r *CollectionPermissionResource) writeCollectionPermission(ctx context.Con
 		return diags
 	}
 
-	// Both are checked, such that all the errors are reported at once.
-	diags.Append(checkPermissionsGroupExists(ctx, r.client, groupId)...)
-	diags.Append(checkCollectionStatus(ctx, r.client, collectionId)...)
-	if diags.HasError() {
-		return diags
-	}
-
 	diags.Append(updateCollectionPermission(ctx, r.client, r.collectionGraph, groupId, collectionId, metabase.CollectionPermissionLevel(data.Permission.ValueString()))...)
 	if diags.HasError() {
 		return diags
@@ -270,6 +263,14 @@ func (r *CollectionPermissionResource) Create(ctx context.Context, req resource.
 	var data *CollectionPermissionResourceModel
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// The group and the collection can only change when the resource is created, as they require a replacement. Both
+	// are checked, such that all the errors are reported at once.
+	resp.Diagnostics.Append(checkPermissionsGroupExists(ctx, r.client, data.Group.ValueInt64())...)
+	resp.Diagnostics.Append(checkCollectionStatus(ctx, r.client, data.Collection.ValueString())...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
