@@ -11,6 +11,7 @@ description: |-
   The lowest permissions can be declared to make sure a group has no access to a database, beyond viewing the data of the questions it has access to: view_data set to unrestricted, create_queries set to no, and download set to none. Unlike the metabase_permissions_graph resource, which considers the pairs with the lowest permissions absent, this resource manages such a pair like any other.
   The download, data_model and details permissions are optional. When they are not set in the configuration, they are never sent to Metabase, and the current values are reported.
   Metabase never removes a (group, database) pair from the graph. When the resource is deleted, its permissions are revoked, like when a pair is removed from the metabase_permissions_graph resource: view_data is set to unrestricted, and create_queries, download, data_model and details are revoked.
+  When the group or the database is deleted, the resource is considered deleted.
   Metabase can return edges which do not define the view_data permission (e.g. a group with only the data_model permission). Such edges cannot be imported, and are considered missing: the resource will be created again by setting its permissions.
   Permissions for the Administrators group (ID 2) cannot be changed, and will result in an error.
 ---
@@ -32,6 +33,8 @@ The lowest permissions can be declared to make sure a group has no access to a d
 The `download`, `data_model` and `details` permissions are optional. When they are not set in the configuration, they are never sent to Metabase, and the current values are reported.
 
 Metabase never removes a (group, database) pair from the graph. When the resource is deleted, its permissions are revoked, like when a pair is removed from the `metabase_permissions_graph` resource: `view_data` is set to `unrestricted`, and `create_queries`, `download`, `data_model` and `details` are revoked.
+
+When the group or the database is deleted, the resource is considered deleted.
 
 Metabase can return edges which do not define the `view_data` permission (e.g. a group with only the `data_model` permission). Such edges cannot be imported, and are considered missing: the resource will be created again by setting its permissions.
 

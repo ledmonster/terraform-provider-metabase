@@ -13,6 +13,8 @@ import (
 	"github.com/flovouin/terraform-provider-metabase/internal/graphlock"
 	"github.com/flovouin/terraform-provider-metabase/metabase"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -264,6 +266,22 @@ resource "metabase_database_permission" "missing_database" {
 				Config:      providerApiKeyConfig + missingDatabase("1"),
 				PlanOnly:    true,
 				ExpectError: regexp.MustCompile("Database not found"),
+			},
+			{
+				// Metabase revokes `create-queries` and `download` when `view-data` is `blocked`.
+				Config: providerApiKeyConfig + `
+resource "metabase_database_permission" "blocked" {
+  group          = 1
+  database       = 1
+  view_data      = "blocked"
+  create_queries = "query-builder"
+  download = {
+    schemas = "full"
+  }
+}
+`,
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`(?s)Invalid permissions for blocked data.*Invalid permissions for blocked data`),
 			},
 			{
 				// Both errors are reported at once.
@@ -545,4 +563,46 @@ func testAccResourceAttribute(s *terraform.State, resourceName string, attribute
 	}
 
 	return rs.Primary.Attributes[attribute], nil
+}
+
+func TestCheckBlockedViewData(t *testing.T) {
+	download := func(schemas string) types.Object {
+		return types.ObjectValueMust(accessPermissionsObjectType.AttrTypes, map[string]attr.Value{"schemas": types.StringValue(schemas)})
+	}
+
+	tests := map[string]struct {
+		viewData       types.String
+		createQueries  types.String
+		download       types.Object
+		expectedErrors []string
+	}{
+		"blocked with revoked permissions": {types.StringValue("blocked"), types.StringValue("no"), download("none"), nil},
+		"blocked without download":         {types.StringValue("blocked"), types.StringValue("no"), types.ObjectNull(accessPermissionsObjectType.AttrTypes), nil},
+		"blocked with create queries":      {types.StringValue("blocked"), types.StringValue("query-builder"), types.ObjectNull(accessPermissionsObjectType.AttrTypes), []string{"create_queries"}},
+		"blocked with download":            {types.StringValue("blocked"), types.StringValue("no"), download("full"), []string{"download"}},
+		"blocked with both":                {types.StringValue("blocked"), types.StringValue("query-builder"), download("full"), []string{"create_queries", "download"}},
+		"blocked with unknown values":      {types.StringValue("blocked"), types.StringUnknown(), types.ObjectUnknown(accessPermissionsObjectType.AttrTypes), nil},
+		"unrestricted":                     {types.StringValue("unrestricted"), types.StringValue("query-builder"), download("full"), nil},
+		"unknown view data":                {types.StringUnknown(), types.StringValue("query-builder"), download("full"), nil},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			diags := checkBlockedViewData(DatabasePermissionResourceModel{
+				ViewData:      test.viewData,
+				CreateQueries: test.createQueries,
+				Download:      test.download,
+			})
+
+			if len(diags) != len(test.expectedErrors) {
+				t.Fatalf("Expected %d errors, got: %v", len(test.expectedErrors), diags)
+			}
+			for i, attribute := range test.expectedErrors {
+				d, ok := diags[i].(diag.DiagnosticWithPath)
+				if !ok || !d.Path().Equal(path.Root(attribute)) {
+					t.Errorf("Expected an error on %s, got: %v", attribute, diags[i])
+				}
+			}
+		})
+	}
 }

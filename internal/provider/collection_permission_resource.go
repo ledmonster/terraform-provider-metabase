@@ -55,7 +55,7 @@ Unlike the ` + "`metabase_collection_graph`" + ` resource, which manages the ent
 
 Each change reads the current revision of the collection graph and sends only the managed edge to Metabase. Changes made by the provider are performed one at a time, along with the creation and update of collections.
 
-The permission can be set to ` + "`none`" + `, e.g. to make sure a group has no access to a collection, as new collections inherit the permissions of their parent collection. Metabase omits ` + "`none`" + ` from the collection graph, so a pair missing from the graph is read as ` + "`none`" + `. When the group or the collection is deleted, or when the collection is archived, the resource is considered deleted, like the ` + "`metabase_collection`" + ` resource.
+The permission can be set to ` + "`none`" + `, e.g. to make sure a group has no access to a collection, as new collections inherit the permissions of their parent collection. Metabase omits ` + "`none`" + ` from the collection graph, so a pair missing from the graph is read as ` + "`none`" + `. When the group or the collection is deleted, when the collection is archived (like the ` + "`metabase_collection`" + ` resource does), or when the collection is moved inside a personal collection, the resource is considered deleted.
 
 The permissions of personal collections, and of the collections inside them, are fixed and cannot be managed.
 

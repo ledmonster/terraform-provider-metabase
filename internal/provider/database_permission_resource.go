@@ -10,6 +10,7 @@ import (
 	"github.com/flovouin/terraform-provider-metabase/internal/graphlock"
 	"github.com/flovouin/terraform-provider-metabase/metabase"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
@@ -95,6 +96,8 @@ The ` + "`download`" + `, ` + "`data_model`" + ` and ` + "`details`" + ` permiss
 
 Metabase never removes a (group, database) pair from the graph. When the resource is deleted, its permissions are revoked, like when a pair is removed from the ` + "`metabase_permissions_graph`" + ` resource: ` + "`view_data`" + ` is set to ` + "`unrestricted`" + `, and ` + "`create_queries`" + `, ` + "`download`" + `, ` + "`data_model`" + ` and ` + "`details`" + ` are revoked.
 
+When the group or the database is deleted, the resource is considered deleted.
+
 Metabase can return edges which do not define the ` + "`view_data`" + ` permission (e.g. a group with only the ` + "`data_model`" + ` permission). Such edges cannot be imported, and are considered missing: the resource will be created again by setting its permissions.
 
 Permissions for the Administrators group (ID ` + "`2`" + `) cannot be changed, and will result in an error.`,
@@ -175,6 +178,39 @@ func (r *DatabasePermissionResource) ValidateConfig(ctx context.Context, req res
 	if !data.Group.IsNull() && !data.Group.IsUnknown() {
 		resp.Diagnostics.Append(checkGroupIsNotAdministrators(data.Group.ValueInt64())...)
 	}
+
+	resp.Diagnostics.Append(checkBlockedViewData(data)...)
+}
+
+// Returns an error if the permissions contradict a `view_data` permission set to `blocked` for the entire database.
+// Metabase then revokes `create-queries` and `download`, which would differ from the configuration after the apply.
+func checkBlockedViewData(data DatabasePermissionResourceModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+
+	if data.ViewData.IsUnknown() || data.ViewData.ValueString() != string(metabase.PermissionsGraphDatabasePermissionsViewData0Blocked) {
+		return diags
+	}
+
+	if !data.CreateQueries.IsUnknown() && data.CreateQueries.ValueString() != string(metabase.PermissionsGraphDatabasePermissionsCreateQueries0No) {
+		diags.AddAttributeError(
+			path.Root("create_queries"),
+			"Invalid permissions for blocked data.",
+			fmt.Sprintf("Metabase revokes the create queries permission when the view data permission is %q, so it must be %q.", metabase.PermissionsGraphDatabasePermissionsViewData0Blocked, metabase.PermissionsGraphDatabasePermissionsCreateQueries0No),
+		)
+	}
+
+	if !data.Download.IsNull() && !data.Download.IsUnknown() {
+		schemas, ok := data.Download.Attributes()["schemas"].(types.String)
+		if ok && !schemas.IsUnknown() && schemas.ValueString() != string(metabase.PermissionsGraphDatabaseAccessSchemas0None) {
+			diags.AddAttributeError(
+				path.Root("download"),
+				"Invalid permissions for blocked data.",
+				fmt.Sprintf("Metabase revokes the download permission when the view data permission is %q, so it must be %q or not set.", metabase.PermissionsGraphDatabasePermissionsViewData0Blocked, metabase.PermissionsGraphDatabaseAccessSchemas0None),
+			)
+		}
+	}
+
+	return diags
 }
 
 // When the optional permissions are not set in the configuration, their values from the state are used in the plan
