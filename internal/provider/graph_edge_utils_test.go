@@ -2,10 +2,20 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 
+	"github.com/flovouin/terraform-provider-metabase/metabase"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 func TestParseGraphEdgeId(t *testing.T) {
@@ -109,4 +119,164 @@ func TestCollectionStatus(t *testing.T) {
 			checkAttributeError(t, diags, "collection", test.expectedSummary)
 		})
 	}
+}
+
+// Creates a permissions group directly using the Metabase API, to act as a group managed outside of Terraform.
+// The group is deleted at the end of the test.
+func testAccCreateBystanderGroup(t *testing.T, name string) int {
+	t.Helper()
+
+	response, err := testAccMetabaseClient.CreatePermissionsGroupWithResponse(context.Background(), metabase.CreatePermissionsGroupBody{
+		Name: name,
+	})
+	if err != nil || response.StatusCode() != 200 {
+		t.Fatalf("Failed to create permissions group: %v, %v", err, response)
+	}
+
+	groupId := response.JSON200.Id
+	t.Cleanup(func() {
+		_, _ = testAccMetabaseClient.DeletePermissionsGroupWithResponse(context.Background(), groupId)
+	})
+
+	return groupId
+}
+
+// Returns the value of an attribute of a resource in the state, to be used by checks in later steps.
+func testAccStoreAttribute(resourceName string, attribute string, value *string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("Failed to find resource %s in state.", resourceName)
+		}
+
+		*value = rs.Primary.Attributes[attribute]
+		return nil
+	}
+}
+
+func mustParseInt64(t *testing.T, s string) int64 {
+	t.Helper()
+
+	i, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		t.Fatalf("Failed to parse integer %q: %v", s, err)
+	}
+
+	return i
+}
+
+// A fake Metabase API serving the permissions and collection graphs. Like Metabase, it rejects updates made from an
+// outdated revision with a 409 status, and only updates the edges present in the request.
+type fakeGraphServer struct {
+	mutex sync.Mutex
+	// The graphs, by API path.
+	graphs map[string]*fakeGraph
+	// The number of updates rejected because of a conflict, whether forced or not.
+	conflicts int
+	// The bodies of the updates that were accepted.
+	acceptedUpdates []map[string]map[string]json.RawMessage
+	// The IDs of the permissions groups which do not exist. All the other groups exist.
+	missingGroups map[string]bool
+	// The collections returned by the API, by ID. The other collections do not exist.
+	collections map[string]string
+}
+
+type fakeGraph struct {
+	revision int
+	groups   map[string]map[string]json.RawMessage
+}
+
+func newFakeGraphServer(t *testing.T) (*fakeGraphServer, *metabase.ClientWithResponses) {
+	t.Helper()
+
+	f := &fakeGraphServer{
+		graphs: map[string]*fakeGraph{
+			"/permissions/graph": {groups: map[string]map[string]json.RawMessage{}},
+			"/collection/graph":  {groups: map[string]map[string]json.RawMessage{}},
+		},
+		missingGroups: map[string]bool{},
+		collections:   map[string]string{},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(f.handle))
+	t.Cleanup(server.Close)
+
+	client, err := metabase.NewClientWithResponses(server.URL)
+	if err != nil {
+		t.Fatalf("Failed to create the client: %v", err)
+	}
+
+	return f, client
+}
+
+func (f *fakeGraphServer) handle(w http.ResponseWriter, r *http.Request) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
+	if groupId, ok := strings.CutPrefix(r.URL.Path, "/permissions/group/"); ok && r.Method == http.MethodGet {
+		if f.missingGroups[groupId] {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id": %s, "name": "Group %s"}`, groupId, groupId)
+		return
+	}
+
+	graph, ok := f.graphs[r.URL.Path]
+	if !ok {
+		collectionId, isCollection := strings.CutPrefix(r.URL.Path, "/collection/")
+		collection, exists := f.collections[collectionId]
+		if !isCollection || !exists || r.Method != http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, collection)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		f.writeGraph(w, graph.revision, graph.groups)
+	case http.MethodPut:
+		var body struct {
+			Revision int                                   `json:"revision"`
+			Groups   map[string]map[string]json.RawMessage `json:"groups"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if body.Revision != graph.revision {
+			f.conflicts++
+			http.Error(w, "Looks like someone else edited the permissions and your data is out of date.", http.StatusConflict)
+			return
+		}
+
+		for groupId, edges := range body.Groups {
+			if graph.groups[groupId] == nil {
+				graph.groups[groupId] = map[string]json.RawMessage{}
+			}
+			for objectId, permissions := range edges {
+				graph.groups[groupId][objectId] = permissions
+			}
+		}
+		graph.revision++
+		f.acceptedUpdates = append(f.acceptedUpdates, body.Groups)
+
+		// Like Metabase, only the edges that were sent are returned.
+		f.writeGraph(w, graph.revision, body.Groups)
+	default:
+		http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+	}
+}
+
+func (f *fakeGraphServer) writeGraph(w http.ResponseWriter, revision int, groups map[string]map[string]json.RawMessage) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"revision": revision,
+		"groups":   groups,
+	})
 }
