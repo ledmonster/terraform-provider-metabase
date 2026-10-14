@@ -178,8 +178,8 @@ func (r *DatabasePermissionResource) ValidateConfig(ctx context.Context, req res
 }
 
 // When the optional permissions are not set in the configuration, their values from the state are used in the plan
-// (see the `UseStateForUnknown` plan modifiers). However Metabase may change them when the main permissions change, in
-// which case they are marked as unknown instead.
+// (see the `UseStateForUnknown` plan modifiers). However Metabase revokes the `download` permission when `view-data` is
+// set to `blocked`, so it is marked as unknown instead when `view_data` changes, unless it becomes `unrestricted`.
 func (r *DatabasePermissionResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	// Nothing to do when deleting the resource.
 	if req.Plan.Raw.IsNull() {
@@ -206,20 +206,13 @@ func (r *DatabasePermissionResource) ModifyPlan(ctx context.Context, req resourc
 		return
 	}
 
-	if plan.ViewData.Equal(state.ViewData) && plan.CreateQueries.Equal(state.CreateQueries) {
+	// `blocked` can be set for the entire database, or for some tables in a JSON object.
+	viewDataMayBlock := !plan.ViewData.Equal(state.ViewData) && plan.ViewData.ValueString() != string(metabase.PermissionsGraphDatabasePermissionsViewData0Unrestricted)
+	if !config.Download.IsNull() || !viewDataMayBlock {
 		return
 	}
 
-	if config.Download.IsNull() {
-		plan.Download = types.ObjectUnknown(accessPermissionsObjectType.AttrTypes)
-	}
-	if config.DataModel.IsNull() {
-		plan.DataModel = types.ObjectUnknown(accessPermissionsObjectType.AttrTypes)
-	}
-	if config.Details.IsNull() {
-		plan.Details = types.StringUnknown()
-	}
-
+	plan.Download = types.ObjectUnknown(accessPermissionsObjectType.AttrTypes)
 	resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
 }
 
