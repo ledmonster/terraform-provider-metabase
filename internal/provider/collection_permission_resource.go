@@ -252,6 +252,8 @@ func checkCollectionStatus(ctx context.Context, client *metabase.ClientWithRespo
 	}
 
 	switch status {
+	case collectionStatusActive:
+		// The permissions of the collection can be managed.
 	case collectionStatusMissing:
 		diags.AddAttributeError(
 			path.Root("collection"),
