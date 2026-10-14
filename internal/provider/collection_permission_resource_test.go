@@ -100,6 +100,28 @@ func testAccSetCollectionPermission(t *testing.T, groupId string, collectionId s
 	}
 }
 
+// Returns the ID of a personal collection, from the collections visible to the test user.
+func testAccGetPersonalCollectionId(t *testing.T) string {
+	t.Helper()
+
+	resp, err := testAccMetabaseClient.ListCollectionsWithResponse(context.Background(), &metabase.ListCollectionsParams{})
+	if err != nil || resp.StatusCode() != 200 {
+		t.Fatalf("Failed to list the collections: %v", err)
+	}
+
+	for _, c := range *resp.JSON200 {
+		if c.PersonalOwnerId != nil {
+			id, err := c.Id.AsCollectionId1()
+			if err == nil {
+				return strconv.Itoa(id)
+			}
+		}
+	}
+
+	t.Fatalf("No personal collection found.")
+	return ""
+}
+
 func testAccCollectionPermissionResource(permissions string) string {
 	return fmt.Sprintf(`
 resource "metabase_permissions_group" "permission_a" {
@@ -311,28 +333,6 @@ func TestAccCollectionPermissionResourceArchivedCollection(t *testing.T) {
 			},
 		},
 	})
-}
-
-// Returns the ID of a personal collection, from the collections visible to the test user.
-func testAccGetPersonalCollectionId(t *testing.T) string {
-	t.Helper()
-
-	resp, err := testAccMetabaseClient.ListCollectionsWithResponse(context.Background(), &metabase.ListCollectionsParams{})
-	if err != nil || resp.StatusCode() != 200 {
-		t.Fatalf("Failed to list the collections: %v", err)
-	}
-
-	for _, c := range *resp.JSON200 {
-		if c.PersonalOwnerId != nil {
-			id, err := c.Id.AsCollectionId1()
-			if err == nil {
-				return strconv.Itoa(id)
-			}
-		}
-	}
-
-	t.Fatalf("No personal collection found.")
-	return ""
 }
 
 // The permissions of personal collections are fixed, and Metabase ignores them when updating the collection graph.
