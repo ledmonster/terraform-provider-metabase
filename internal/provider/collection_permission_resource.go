@@ -206,7 +206,7 @@ var errCollectionGraphNotRead = errors.New("the collection graph could not be re
 // who can see and restore it from the trash, but they can no longer be managed by this resource. They are not part of
 // the collection graph, so they cannot be read, although Metabase accepts updating them.
 func (r *CollectionPermissionResource) isDeleted(ctx context.Context, data CollectionPermissionResourceModel) (bool, diag.Diagnostics) {
-	groupExists, diags := getPermissionsGroupExists(ctx, r.client, data.Group.ValueInt64())
+	groupExists, diags := permissionsGroupExists(ctx, r.client, data.Group.ValueInt64())
 	if diags.HasError() || !groupExists {
 		return !groupExists, diags
 	}

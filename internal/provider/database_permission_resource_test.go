@@ -470,6 +470,10 @@ type fakeGraphServer struct {
 	conflicts int
 	// The bodies of the updates that were accepted.
 	acceptedUpdates []map[string]map[string]json.RawMessage
+	// The IDs of the permissions groups which do not exist. All the other groups exist.
+	missingGroups map[string]bool
+	// The collections returned by the API, by ID. The other collections do not exist.
+	collections map[string]string
 }
 
 type fakeGraph struct {
@@ -485,6 +489,8 @@ func newFakeGraphServer(t *testing.T) (*fakeGraphServer, *metabase.ClientWithRes
 			"/permissions/graph": {groups: map[string]map[string]json.RawMessage{}},
 			"/collection/graph":  {groups: map[string]map[string]json.RawMessage{}},
 		},
+		missingGroups: map[string]bool{},
+		collections:   map[string]string{},
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(f.handle))
@@ -502,8 +508,11 @@ func (f *fakeGraphServer) handle(w http.ResponseWriter, r *http.Request) {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
-	// Every permissions group exists.
 	if groupId, ok := strings.CutPrefix(r.URL.Path, "/permissions/group/"); ok && r.Method == http.MethodGet {
+		if f.missingGroups[groupId] {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"id": %s, "name": "Group %s"}`, groupId, groupId)
 		return
@@ -511,7 +520,14 @@ func (f *fakeGraphServer) handle(w http.ResponseWriter, r *http.Request) {
 
 	graph, ok := f.graphs[r.URL.Path]
 	if !ok {
-		http.NotFound(w, r)
+		collectionId, isCollection := strings.CutPrefix(r.URL.Path, "/collection/")
+		collection, exists := f.collections[collectionId]
+		if !isCollection || !exists || r.Method != http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, collection)
 		return
 	}
 

@@ -47,7 +47,7 @@ func checkGroupIsNotAdministrators(groupId int64) diag.Diagnostics {
 }
 
 // Returns whether the given permissions group exists.
-func getPermissionsGroupExists(ctx context.Context, client *metabase.ClientWithResponses, groupId int64) (bool, diag.Diagnostics) {
+func permissionsGroupExists(ctx context.Context, client *metabase.ClientWithResponses, groupId int64) (bool, diag.Diagnostics) {
 	getResp, err := client.GetPermissionsGroupWithResponse(ctx, int(groupId))
 
 	diags := checkMetabaseResponse(getResp, err, []int{200, 404}, "get permissions group")
@@ -60,7 +60,7 @@ func getPermissionsGroupExists(ctx context.Context, client *metabase.ClientWithR
 
 // Returns an error if the given permissions group does not exist.
 func checkPermissionsGroupExists(ctx context.Context, client *metabase.ClientWithResponses, groupId int64) diag.Diagnostics {
-	exists, diags := getPermissionsGroupExists(ctx, client, groupId)
+	exists, diags := permissionsGroupExists(ctx, client, groupId)
 	if !diags.HasError() && !exists {
 		diags.AddAttributeError(
 			path.Root("group"),
