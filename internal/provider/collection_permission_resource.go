@@ -219,14 +219,16 @@ const (
 // who can see and restore it from the trash, but they can no longer be managed by this resource. They are not part of
 // the collection graph, so they cannot be read, although Metabase accepts updating them.
 func getCollectionStatus(ctx context.Context, client *metabase.ClientWithResponses, collectionId string) (collectionStatus, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
 	// The root collection always exists, and is not personal.
 	if collectionId == "root" {
-		return collectionStatusActive, nil
+		return collectionStatusActive, diags
 	}
 
 	getResp, err := client.GetCollectionWithResponse(ctx, collectionId)
 
-	diags := checkMetabaseResponse(getResp, err, []int{200, 404}, "get collection")
+	diags.Append(checkMetabaseResponse(getResp, err, []int{200, 404}, "get collection")...)
 	if diags.HasError() {
 		return collectionStatusMissing, diags
 	}
@@ -264,14 +266,6 @@ func checkCollectionStatus(ctx context.Context, client *metabase.ClientWithRespo
 		)
 	}
 
-	return diags
-}
-
-// Returns an error if the permission of the given group on the given collection cannot be managed. The group and the
-// collection are both checked, such that all the errors are reported at once.
-func checkCollectionPermissionPair(ctx context.Context, client *metabase.ClientWithResponses, groupId int64, collectionId string) diag.Diagnostics {
-	diags := checkPermissionsGroupExists(ctx, client, groupId)
-	diags.Append(checkCollectionStatus(ctx, client, collectionId)...)
 	return diags
 }
 
@@ -326,7 +320,9 @@ func (r *CollectionPermissionResource) writeCollectionPermission(ctx context.Con
 		return diags
 	}
 
-	diags.Append(checkCollectionPermissionPair(ctx, r.client, groupId, collectionId)...)
+	// Both are checked, such that all the errors are reported at once.
+	diags.Append(checkPermissionsGroupExists(ctx, r.client, groupId)...)
+	diags.Append(checkCollectionStatus(ctx, r.client, collectionId)...)
 	if diags.HasError() {
 		return diags
 	}
@@ -431,7 +427,9 @@ func (r *CollectionPermissionResource) ImportState(ctx context.Context, req reso
 		return
 	}
 
-	resp.Diagnostics.Append(checkCollectionPermissionPair(ctx, r.client, groupId, collectionId)...)
+	// Both are checked, such that all the errors are reported at once.
+	resp.Diagnostics.Append(checkPermissionsGroupExists(ctx, r.client, groupId)...)
+	resp.Diagnostics.Append(checkCollectionStatus(ctx, r.client, collectionId)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
