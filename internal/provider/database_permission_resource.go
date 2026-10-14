@@ -197,11 +197,6 @@ func (r *DatabasePermissionResource) ModifyPlan(ctx context.Context, req resourc
 	resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
 }
 
-// Returns the ID of the resource, from the group and database IDs.
-func makeDatabasePermissionId(groupId int64, databaseId int64) string {
-	return fmt.Sprintf("%d/%d", groupId, databaseId)
-}
-
 // Converts the resource model to the model of an edge in the permissions graph. Values which are not known yet (not set
 // in the configuration and not in the state) are converted to null, meaning they are not sent to Metabase.
 func (m DatabasePermissionResourceModel) toEdge() DatabasePermissions {
@@ -356,7 +351,7 @@ func (r *DatabasePermissionResource) readDatabasePermissions(ctx context.Context
 		return false, nil, diags
 	}
 
-	data.Id = types.StringValue(makeDatabasePermissionId(groupId, databaseId))
+	data.Id = types.StringValue(makeGraphEdgeId(groupId, strconv.FormatInt(databaseId, 10)))
 	data.ViewData = edge.ViewData
 	data.CreateQueries = edge.CreateQueries
 	// Metabase omits revoked permissions from its responses, so the revoked values of the model are kept.
@@ -538,7 +533,7 @@ func (r *DatabasePermissionResource) Delete(ctx context.Context, req resource.De
 }
 
 func (r *DatabasePermissionResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	groupId, databaseId, diags := parseGraphEdgeImportId(req.ID, "database")
+	groupId, databaseId, diags := parseGraphEdgeId(req.ID, "database")
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return

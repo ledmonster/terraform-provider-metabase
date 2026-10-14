@@ -153,11 +153,6 @@ func checkCollectionPermissionLevel(permission string) diag.Diagnostics {
 	return diags
 }
 
-// Returns the ID of the resource, from the group and collection IDs.
-func makeCollectionPermissionId(groupId int64, collectionId string) string {
-	return fmt.Sprintf("%d/%s", groupId, collectionId)
-}
-
 // Sets the permission for a single edge of the collection graph, leaving all other edges untouched. The graph is read
 // right before the update. The update records a new revision of the collection graph, so it is tracked like the creation
 // of collections (see `graphlock.CollectionGraphTracker`).
@@ -235,7 +230,7 @@ func (r *CollectionPermissionResource) readCollectionPermission(ctx context.Cont
 		permission = metabase.CollectionPermissionLevelNone
 	}
 
-	data.Id = types.StringValue(makeCollectionPermissionId(groupId, collectionId))
+	data.Id = types.StringValue(makeGraphEdgeId(groupId, collectionId))
 	data.Permission = types.StringValue(string(permission))
 
 	return diags
@@ -350,7 +345,7 @@ func (r *CollectionPermissionResource) Delete(ctx context.Context, req resource.
 }
 
 func (r *CollectionPermissionResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	groupId, collectionId, diags := parseGraphEdgeImportId(req.ID, "collection")
+	groupId, collectionId, diags := parseGraphEdgeId(req.ID, "collection")
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return

@@ -8,7 +8,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 )
 
-func TestParseGraphEdgeImportId(t *testing.T) {
+func TestParseGraphEdgeId(t *testing.T) {
 	tests := map[string]struct {
 		id             string
 		expectedGroup  int64
@@ -24,12 +24,16 @@ func TestParseGraphEdgeImportId(t *testing.T) {
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			group, object, diags := parseGraphEdgeImportId(test.id, "object")
+			group, object, diags := parseGraphEdgeId(test.id, "object")
 			if diags.HasError() != test.expectError {
 				t.Fatalf("Unexpected diagnostics: %v", diags)
 			}
 			if !test.expectError && (group != test.expectedGroup || object != test.expectedObject) {
 				t.Errorf("Expected %d/%s, got %d/%s.", test.expectedGroup, test.expectedObject, group, object)
+			}
+			// The ID made from the parsed group and object is the original ID.
+			if !test.expectError && makeGraphEdgeId(group, object) != test.id {
+				t.Errorf("Expected the ID %s to be made again, got %s.", test.id, makeGraphEdgeId(group, object))
 			}
 		})
 	}

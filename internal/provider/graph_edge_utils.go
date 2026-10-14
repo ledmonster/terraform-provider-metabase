@@ -11,8 +11,14 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 )
 
-// Parses an import ID of the form `<group>/<object>`, where `<group>` is the ID of a permissions group.
-func parseGraphEdgeImportId(id string, objectName string) (int64, string, diag.Diagnostics) {
+// Returns the ID of an edge of a graph, from the IDs of its group and of its object (a database or a collection). An edge
+// is identified by both of its ends, like in the graphs returned by the Metabase API.
+func makeGraphEdgeId(groupId int64, objectId string) string {
+	return fmt.Sprintf("%d/%s", groupId, objectId)
+}
+
+// Parses the ID of an edge of a graph (see `makeGraphEdgeId`), of the form `<group>/<object>`.
+func parseGraphEdgeId(id string, objectName string) (int64, string, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	groupId, objectId, found := strings.Cut(id, "/")
