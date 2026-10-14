@@ -83,7 +83,7 @@ Unlike the resource, this data source only reads the permissions graph and does 
 							Computed:            true,
 							Attributes: map[string]schema.Attribute{
 								"schemas": schema.StringAttribute{
-									MarkdownDescription: "The permission to access data through the Metabase interface.",
+									MarkdownDescription: downloadSchemasDescription,
 									Computed:            true,
 								},
 							},
@@ -93,7 +93,7 @@ Unlike the resource, this data source only reads the permissions graph and does 
 							Computed:            true,
 							Attributes: map[string]schema.Attribute{
 								"schemas": schema.StringAttribute{
-									MarkdownDescription: "The permission to access data through the Metabase interface.",
+									MarkdownDescription: dataModelSchemasDescription,
 									Computed:            true,
 								},
 							},
