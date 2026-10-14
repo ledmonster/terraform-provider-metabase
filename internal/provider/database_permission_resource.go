@@ -332,7 +332,7 @@ func (r *DatabasePermissionResource) readDatabasePermissions(ctx context.Context
 		return false, nil, diags
 	}
 
-	comparable, err := makeComparableDatabasePermissions(*permissions)
+	current, err := makeComparableDatabasePermissions(*permissions)
 	if err != nil {
 		diags.AddError("Unexpected error serializing permissions.", err.Error())
 		return false, nil, diags
@@ -340,7 +340,7 @@ func (r *DatabasePermissionResource) readDatabasePermissions(ctx context.Context
 
 	// Passing the existing model allows keeping the serialization of JSON permissions when Metabase reshapes them.
 	var existing *DatabasePermissions
-	if written == nil || bytes.Equal(written, comparable) {
+	if written == nil || bytes.Equal(written, current) {
 		edge := data.toEdge()
 		existing = &edge
 	}
@@ -366,7 +366,7 @@ func (r *DatabasePermissionResource) readDatabasePermissions(ctx context.Context
 		data.Details = edge.Details
 	}
 
-	return true, comparable, diags
+	return true, current, diags
 }
 
 // Returns the access permissions read from Metabase, unless they are missing and the model revokes them. Metabase omits
