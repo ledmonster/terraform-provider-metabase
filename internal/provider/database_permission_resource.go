@@ -51,6 +51,32 @@ type DatabasePermissionResourceModel struct {
 	Details       types.String `tfsdk:"details"`        // Details permission.
 }
 
+// Converts the resource model to the model of an edge in the permissions graph. Values which are not known yet (not set
+// in the configuration and not in the state) are converted to null, meaning they are not sent to Metabase.
+func (m DatabasePermissionResourceModel) toEdge() DatabasePermissions {
+	nullIfUnknown := func(o types.Object) types.Object {
+		if o.IsUnknown() {
+			return types.ObjectNull(accessPermissionsObjectType.AttrTypes)
+		}
+		return o
+	}
+
+	details := m.Details
+	if details.IsUnknown() {
+		details = types.StringNull()
+	}
+
+	return DatabasePermissions{
+		Group:         m.Group,
+		Database:      m.Database,
+		ViewData:      m.ViewData,
+		CreateQueries: m.CreateQueries,
+		Download:      nullIfUnknown(m.Download),
+		DataModel:     nullIfUnknown(m.DataModel),
+		Details:       details,
+	}
+}
+
 func (r *DatabasePermissionResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: `The permissions of a single permissions group on a single database.
@@ -195,32 +221,6 @@ func (r *DatabasePermissionResource) ModifyPlan(ctx context.Context, req resourc
 	}
 
 	resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
-}
-
-// Converts the resource model to the model of an edge in the permissions graph. Values which are not known yet (not set
-// in the configuration and not in the state) are converted to null, meaning they are not sent to Metabase.
-func (m DatabasePermissionResourceModel) toEdge() DatabasePermissions {
-	nullIfUnknown := func(o types.Object) types.Object {
-		if o.IsUnknown() {
-			return types.ObjectNull(accessPermissionsObjectType.AttrTypes)
-		}
-		return o
-	}
-
-	details := m.Details
-	if details.IsUnknown() {
-		details = types.StringNull()
-	}
-
-	return DatabasePermissions{
-		Group:         m.Group,
-		Database:      m.Database,
-		ViewData:      m.ViewData,
-		CreateQueries: m.CreateQueries,
-		Download:      nullIfUnknown(m.Download),
-		DataModel:     nullIfUnknown(m.DataModel),
-		Details:       details,
-	}
 }
 
 // Returns the permissions for the given group and database in the graph, or `nil` if the graph does not contain it or
