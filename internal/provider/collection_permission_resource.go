@@ -198,6 +198,7 @@ func (r *CollectionPermissionResource) checkPermissionCanBeManaged(ctx context.C
 		return unmanageable, diags
 	}
 
+	// The root collection always exists, and is not personal.
 	if collectionId == "root" {
 		return unmanageable, diags
 	}
