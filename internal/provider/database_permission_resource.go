@@ -233,10 +233,9 @@ func findDatabasePermissions(g metabase.PermissionsGraph, groupId int64, databas
 }
 
 // Sends the given permissions for a single edge of the permissions graph, leaving all other edges untouched. The graph
-// is read right before the update, which is serialized with the other updates of the graph by the provider.
-// `makePermissions` is passed the current permissions for the edge (possibly `nil`), and should return the permissions
-// to send, or `nil` if no update is needed.
-func updateDatabasePermissions(ctx context.Context, client *metabase.ClientWithResponses, tracker *graphlock.PermissionsGraphTracker, groupId int64, databaseId int64, makePermissions func(*metabase.PermissionsGraphDatabasePermissions) (*metabase.PermissionsGraphDatabasePermissions, diag.Diagnostics)) diag.Diagnostics {
+// is read right before the update, as the update must include its current revision. The update is serialized with the
+// other updates of the graph by the provider.
+func updateDatabasePermissions(ctx context.Context, client *metabase.ClientWithResponses, tracker *graphlock.PermissionsGraphTracker, groupId int64, databaseId int64, permissions metabase.PermissionsGraphDatabasePermissions) diag.Diagnostics {
 	var diags diag.Diagnostics
 
 	_ = tracker.Update(func() error {
@@ -247,18 +246,12 @@ func updateDatabasePermissions(ctx context.Context, client *metabase.ClientWithR
 			return nil
 		}
 
-		permissions, permissionsDiags := makePermissions(findDatabasePermissions(*getResp.JSON200, groupId, databaseId))
-		diags.Append(permissionsDiags...)
-		if diags.HasError() || permissions == nil {
-			return nil
-		}
-
 		// Metabase only updates the edges present in the request.
 		updateResp, err := client.ReplacePermissionsGraphWithResponse(ctx, metabase.PermissionsGraph{
 			Revision: getResp.JSON200.Revision,
 			Groups: map[string]metabase.PermissionsGraphDatabasePermissionsMap{
 				strconv.FormatInt(groupId, 10): {
-					strconv.FormatInt(databaseId, 10): *permissions,
+					strconv.FormatInt(databaseId, 10): permissions,
 				},
 			},
 		})
@@ -404,9 +397,7 @@ func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Contex
 		return nil, diags
 	}
 
-	diags.Append(updateDatabasePermissions(ctx, r.client, r.permissionsGraph, groupId, databaseId, func(*metabase.PermissionsGraphDatabasePermissions) (*metabase.PermissionsGraphDatabasePermissions, diag.Diagnostics) {
-		return permissions, nil
-	})...)
+	diags.Append(updateDatabasePermissions(ctx, r.client, r.permissionsGraph, groupId, databaseId, *permissions)...)
 	if diags.HasError() {
 		return nil, diags
 	}
@@ -510,19 +501,25 @@ func (r *DatabasePermissionResource) Delete(ctx context.Context, req resource.De
 		return
 	}
 
+	groupId := data.Group.ValueInt64()
+	databaseId := data.Database.ValueInt64()
+
+	getResp, err := r.client.GetPermissionsGraphWithResponse(ctx)
+
+	resp.Diagnostics.Append(checkMetabaseResponse(getResp, err, []int{200}, "get permissions graph")...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// There is nothing to revoke when the edge has no `view-data` permission, e.g. when its group or its database was
+	// deleted.
+	if findDatabasePermissions(*getResp.JSON200, groupId, databaseId) == nil {
+		return
+	}
+
 	// Metabase never removes an edge from the graph, so its permissions are revoked instead, like when an edge is removed
 	// from the `metabase_permissions_graph` resource. Revoking advanced permissions is ignored on the free edition.
-	resp.Diagnostics.Append(updateDatabasePermissions(ctx, r.client, r.permissionsGraph, data.Group.ValueInt64(), data.Database.ValueInt64(), func(current *metabase.PermissionsGraphDatabasePermissions) (*metabase.PermissionsGraphDatabasePermissions, diag.Diagnostics) {
-		var diags diag.Diagnostics
-
-		// The edge has no `view-data` permission (or does not exist), so there is nothing to revoke.
-		if current == nil {
-			return nil, diags
-		}
-
-		permissions := makeRevokedDatabasePermissions(true)
-		return &permissions, diags
-	})...)
+	resp.Diagnostics.Append(updateDatabasePermissions(ctx, r.client, r.permissionsGraph, groupId, databaseId, makeRevokedDatabasePermissions(true))...)
 }
 
 func (r *DatabasePermissionResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

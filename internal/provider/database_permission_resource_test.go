@@ -13,7 +13,6 @@ import (
 	"github.com/flovouin/terraform-provider-metabase/internal/graphlock"
 	"github.com/flovouin/terraform-provider-metabase/metabase"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
-	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -205,9 +204,7 @@ func testAccSetDatabasePermissions(t *testing.T, groupId string, databaseId stri
 		t.Fatalf("Failed to parse permissions: %v", err)
 	}
 
-	diags := updateDatabasePermissions(context.Background(), testAccMetabaseClient, graphlock.NewPermissionsGraphTracker(), mustParseInt64(t, groupId), mustParseInt64(t, databaseId), func(*metabase.PermissionsGraphDatabasePermissions) (*metabase.PermissionsGraphDatabasePermissions, diag.Diagnostics) {
-		return &p, nil
-	})
+	diags := updateDatabasePermissions(context.Background(), testAccMetabaseClient, graphlock.NewPermissionsGraphTracker(), mustParseInt64(t, groupId), mustParseInt64(t, databaseId), p)
 	if diags.HasError() {
 		t.Fatalf("Failed to set permissions: %v", diags)
 	}
