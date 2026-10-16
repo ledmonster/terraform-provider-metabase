@@ -312,10 +312,10 @@ func makeComparableDatabasePermissions(p metabase.PermissionsGraphDatabasePermis
 }
 
 // Converts the permissions of an edge returned by the Metabase API to the Terraform model. Metabase can return JSON
-// permissions in a different but equivalent shape (e.g. collapsing a uniform object to a single value). When `shape` is
-// not `nil`, its JSON values of `view_data` and `create_queries` are kept, to avoid a perpetual diff.
-func makeDatabasePermissionsModel(ctx context.Context, p metabase.PermissionsGraphDatabasePermissions, groupId int64, databaseId int64, shape *DatabasePermissions) (DatabasePermissions, diag.Diagnostics) {
-	edgeObject, diags := makePermissionsObjectFromDatabasePermissions(ctx, int(groupId), int(databaseId), withMissingPermissionsRevoked(p), shape)
+// permissions in a different but equivalent shape (e.g. collapsing a uniform object to a single value). When `existing`
+// is not `nil`, its JSON values of `view_data` and `create_queries` are kept, to avoid a perpetual diff.
+func makeDatabasePermissionsModel(ctx context.Context, p metabase.PermissionsGraphDatabasePermissions, groupId int64, databaseId int64, existing *DatabasePermissions) (DatabasePermissions, diag.Diagnostics) {
+	edgeObject, diags := makePermissionsObjectFromDatabasePermissions(ctx, int(groupId), int(databaseId), withMissingPermissionsRevoked(p), existing)
 	if diags.HasError() {
 		return DatabasePermissions{}, diags
 	}
@@ -483,12 +483,12 @@ func (r *DatabasePermissionResource) Read(ctx context.Context, req resource.Read
 	// The JSON values of the state are kept as long as the response has not changed since the last write. Otherwise,
 	// the permissions were changed outside of Terraform, and the response is used instead, such that the change is
 	// reported.
-	var shape *DatabasePermissions
+	var existing *DatabasePermissions
 	if written == nil || bytes.Equal(written, current) {
-		shape = &state.DatabasePermissions
+		existing = &state.DatabasePermissions
 	}
 
-	state.DatabasePermissions, diags = makeDatabasePermissionsModel(ctx, *permissions, state.Group.ValueInt64(), state.Database.ValueInt64(), shape)
+	state.DatabasePermissions, diags = makeDatabasePermissionsModel(ctx, *permissions, state.Group.ValueInt64(), state.Database.ValueInt64(), existing)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
