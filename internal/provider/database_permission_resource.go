@@ -52,32 +52,6 @@ type DatabasePermissionResourceModel struct {
 	Details       types.String `tfsdk:"details"`        // Details permission.
 }
 
-// Converts the resource model to the model of an edge in the permissions graph. Values which are not known yet (not set
-// in the configuration and not in the state) are converted to null, meaning they are not sent to Metabase.
-func (m DatabasePermissionResourceModel) toEdge() DatabasePermissions {
-	nullIfUnknown := func(o types.Object) types.Object {
-		if o.IsUnknown() {
-			return types.ObjectNull(accessPermissionsObjectType.AttrTypes)
-		}
-		return o
-	}
-
-	details := m.Details
-	if details.IsUnknown() {
-		details = types.StringNull()
-	}
-
-	return DatabasePermissions{
-		Group:         m.Group,
-		Database:      m.Database,
-		ViewData:      m.ViewData,
-		CreateQueries: m.CreateQueries,
-		Download:      nullIfUnknown(m.Download),
-		DataModel:     nullIfUnknown(m.DataModel),
-		Details:       details,
-	}
-}
-
 func (r *DatabasePermissionResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: `The permissions of a single permissions group on a single database.
@@ -362,11 +336,11 @@ func updateModelFromDatabasePermissions(ctx context.Context, permissions metabas
 		return nil, diags
 	}
 
-	// Passing the existing model allows keeping the serialization of JSON permissions when Metabase reshapes them.
+	// Passing the existing model allows keeping the serialization of JSON permissions when Metabase reshapes them. Only
+	// `view_data` and `create_queries` can be JSON.
 	var existing *DatabasePermissions
 	if written == nil || bytes.Equal(written, current) {
-		edge := data.toEdge()
-		existing = &edge
+		existing = &DatabasePermissions{ViewData: data.ViewData, CreateQueries: data.CreateQueries}
 	}
 	edgeObject, objDiags := makePermissionsObjectFromDatabasePermissions(ctx, int(groupId), int(databaseId), withMissingPermissionsRevoked(permissions), existing)
 	diags.Append(objDiags...)
@@ -426,11 +400,17 @@ func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Contex
 		return nil, diags
 	}
 
-	edge := data.toEdge()
-	configEdge := config.toEdge()
-	edge.Download = configEdge.Download
-	edge.DataModel = configEdge.DataModel
-	edge.Details = configEdge.Details
+	edge := DatabasePermissions{
+		Group:         data.Group,
+		Database:      data.Database,
+		ViewData:      data.ViewData,
+		CreateQueries: data.CreateQueries,
+		// The optional permissions are only sent when they are set in the configuration. The plan can contain their
+		// values from the state, which should not be sent back to Metabase.
+		Download:  config.Download,
+		DataModel: config.DataModel,
+		Details:   config.Details,
+	}
 
 	permissions, permDiags := makeDatabasePermissionsFromModel(ctx, edge, false)
 	diags.Append(permDiags...)
