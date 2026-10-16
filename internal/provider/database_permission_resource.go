@@ -179,12 +179,13 @@ func (r *DatabasePermissionResource) ValidateConfig(ctx context.Context, req res
 		resp.Diagnostics.Append(checkGroupIsNotAdministrators(data.Group.ValueInt64())...)
 	}
 
-	resp.Diagnostics.Append(checkBlockedViewData(data)...)
+	resp.Diagnostics.Append(checkDatabasePermissions(data)...)
 }
 
-// Returns an error if the permissions contradict a `view_data` permission set to `blocked` for the entire database.
-// Metabase then revokes `create-queries` and `download`, which would differ from the configuration after the apply.
-func checkBlockedViewData(data DatabasePermissionResourceModel) diag.Diagnostics {
+// Returns errors for the combinations of permissions which Metabase changes when they are applied, and which would then
+// differ from the configuration after the apply. When `view_data` is set to `blocked` for the entire database, Metabase
+// revokes `create-queries` and `download`.
+func checkDatabasePermissions(data DatabasePermissionResourceModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
 	if data.ViewData.IsUnknown() || data.ViewData.ValueString() != string(metabase.PermissionsGraphDatabasePermissionsViewData0Blocked) {

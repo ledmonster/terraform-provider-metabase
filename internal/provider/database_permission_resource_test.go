@@ -651,7 +651,7 @@ func testAccResourceAttribute(s *terraform.State, resourceName string, attribute
 	return rs.Primary.Attributes[attribute], nil
 }
 
-func TestCheckBlockedViewData(t *testing.T) {
+func TestCheckDatabasePermissions(t *testing.T) {
 	download := func(schemas string) types.Object {
 		return types.ObjectValueMust(accessPermissionsObjectType.AttrTypes, map[string]attr.Value{"schemas": types.StringValue(schemas)})
 	}
@@ -674,7 +674,7 @@ func TestCheckBlockedViewData(t *testing.T) {
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			diags := checkBlockedViewData(DatabasePermissionResourceModel{
+			diags := checkDatabasePermissions(DatabasePermissionResourceModel{
 				ViewData:      test.viewData,
 				CreateQueries: test.createQueries,
 				Download:      test.download,
