@@ -542,6 +542,36 @@ func TestWriteDatabasePermissionsOnlySendsConfiguredOptionalPermissions(t *testi
 	}
 }
 
+// The permissions may be unknown when the configuration is validated, so they are checked again before the update.
+func TestWriteDatabasePermissionsChecksPermissions(t *testing.T) {
+	fake, client := newFakeMetabaseServer(t)
+	r := &DatabasePermissionResource{MetabaseBaseResource{metabaseResourceData: metabaseResourceData{
+		client:           client,
+		permissionsGraph: graphlock.NewPermissionsGraphTracker(),
+	}}}
+
+	plan := DatabasePermissionResourceModel{
+		Group:         types.Int64Value(3),
+		Database:      types.Int64Value(1),
+		ViewData:      types.StringValue("blocked"),
+		CreateQueries: types.StringValue("query-builder"),
+		Download:      types.ObjectUnknown(accessPermissionsObjectType.AttrTypes),
+		DataModel:     types.ObjectUnknown(accessPermissionsObjectType.AttrTypes),
+		Details:       types.StringUnknown(),
+	}
+	config := plan
+	config.Download = types.ObjectNull(accessPermissionsObjectType.AttrTypes)
+	config.DataModel = types.ObjectNull(accessPermissionsObjectType.AttrTypes)
+	config.Details = types.StringNull()
+
+	_, diags := r.writeDatabasePermissions(context.Background(), &plan, config)
+	checkAttributeError(t, diags, "create_queries", "Invalid permissions for blocked data.")
+
+	if len(fake.acceptedUpdates) != 0 {
+		t.Errorf("Expected no update, got %d.", len(fake.acceptedUpdates))
+	}
+}
+
 func TestWithMissingPermissionsRevoked(t *testing.T) {
 	parse := func(s string) metabase.PermissionsGraphDatabasePermissions {
 		var p metabase.PermissionsGraphDatabasePermissions

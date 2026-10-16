@@ -416,6 +416,9 @@ func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Contex
 	databaseId := data.Database.ValueInt64()
 
 	diags.Append(checkGroupIsNotAdministrators(groupId)...)
+	// The permissions are checked again, as they may have been unknown when the configuration was validated. The
+	// configuration is checked rather than the plan, which can contain the optional permissions from the state.
+	diags.Append(checkDatabasePermissions(config)...)
 	if diags.HasError() {
 		return nil, diags
 	}
