@@ -133,7 +133,7 @@ Permissions for the Administrators group (ID ` + "`2`" + `) cannot be changed, a
 				Required:            true,
 			},
 			"download": schema.SingleNestedAttribute{
-				MarkdownDescription: "The permission definition for downloading data. If not set, the current value in Metabase is left as is.",
+				MarkdownDescription: "The permission definition for downloading data. If not set, the current value in Metabase is left as is. When the permission is revoked, Metabase omits it from its responses, and it is reported as `none`.",
 				Optional:            true,
 				Computed:            true,
 				Attributes: map[string]schema.Attribute{
@@ -145,7 +145,7 @@ Permissions for the Administrators group (ID ` + "`2`" + `) cannot be changed, a
 				PlanModifiers: []planmodifier.Object{objectplanmodifier.UseStateForUnknown()},
 			},
 			"data_model": schema.SingleNestedAttribute{
-				MarkdownDescription: "The permission definition for accessing the data model. If not set, the current value in Metabase is left as is.",
+				MarkdownDescription: "The permission definition for accessing the data model. If not set, the current value in Metabase is left as is. When the permission is revoked, Metabase omits it from its responses, and it is reported as `none`, which is always the case on the free edition.",
 				Optional:            true,
 				Computed:            true,
 				Attributes: map[string]schema.Attribute{
@@ -157,7 +157,7 @@ Permissions for the Administrators group (ID ` + "`2`" + `) cannot be changed, a
 				PlanModifiers: []planmodifier.Object{objectplanmodifier.UseStateForUnknown()},
 			},
 			"details": schema.StringAttribute{
-				MarkdownDescription: "The permission definition for accessing details. If not set, the current value in Metabase is left as is.",
+				MarkdownDescription: "The permission definition for accessing details. If not set, the current value in Metabase is left as is. When the permission is revoked, Metabase omits it from its responses, and it is reported as `no`, which is always the case on the free edition.",
 				Optional:            true,
 				Computed:            true,
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
@@ -364,7 +364,7 @@ func updateModelFromDatabasePermissions(ctx context.Context, permissions metabas
 		edge := data.toEdge()
 		existing = &edge
 	}
-	edgeObject, objDiags := makePermissionsObjectFromDatabasePermissions(ctx, int(groupId), int(databaseId), permissions, existing)
+	edgeObject, objDiags := makePermissionsObjectFromDatabasePermissions(ctx, int(groupId), int(databaseId), withMissingPermissionsRevoked(permissions), existing)
 	diags.Append(objDiags...)
 	if diags.HasError() {
 		return nil, diags
@@ -378,29 +378,30 @@ func updateModelFromDatabasePermissions(ctx context.Context, permissions metabas
 
 	data.ViewData = edge.ViewData
 	data.CreateQueries = edge.CreateQueries
-	// Metabase omits revoked permissions from its responses, so the revoked values of the model are kept.
-	data.Download = keepRevokedAccessPermissions(edge.Download, data.Download)
-	data.DataModel = keepRevokedAccessPermissions(edge.DataModel, data.DataModel)
-	if !edge.Details.IsNull() || data.Details.ValueString() != string(metabase.PermissionsGraphDatabasePermissionsDetailsNo) {
-		data.Details = edge.Details
-	}
+	data.Download = edge.Download
+	data.DataModel = edge.DataModel
+	data.Details = edge.Details
 
 	return current, diags
 }
 
-// Returns the access permissions read from Metabase, unless they are missing and the model revokes them. Metabase omits
-// revoked permissions (`none`) from its responses, which would otherwise be reported as a different value.
-func keepRevokedAccessPermissions(read types.Object, model types.Object) types.Object {
-	if !read.IsNull() || model.IsNull() || model.IsUnknown() {
-		return read
+// Returns the given permissions, with the missing `download`, `data-model` and `details` permissions set to their revoked
+// values. Metabase omits revoked permissions from its responses, so they are read as revoked, like a missing
+// `create-queries` permission is read as `no`. Advanced permissions are revoked as well, as they are always missing on
+// the free edition.
+func withMissingPermissionsRevoked(p metabase.PermissionsGraphDatabasePermissions) metabase.PermissionsGraphDatabasePermissions {
+	revoked := makeRevokedDatabasePermissions(true)
+	if p.Download == nil {
+		p.Download = revoked.Download
+	}
+	if p.DataModel == nil {
+		p.DataModel = revoked.DataModel
+	}
+	if p.Details == nil {
+		p.Details = revoked.Details
 	}
 
-	schemas, ok := model.Attributes()["schemas"].(types.String)
-	if ok && schemas.ValueString() == string(metabase.PermissionsGraphDatabaseAccessSchemas0None) {
-		return model
-	}
-
-	return read
+	return p
 }
 
 // Sends the permissions defined in the plan to Metabase, and updates the plan with the values returned by Metabase.

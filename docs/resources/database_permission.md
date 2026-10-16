@@ -92,9 +92,9 @@ resource "metabase_database_permission" "all_users_bigquery" {
 
 ### Optional
 
-- `data_model` (Attributes) The permission definition for accessing the data model. If not set, the current value in Metabase is left as is. (see [below for nested schema](#nestedatt--data_model))
-- `details` (String) The permission definition for accessing details. If not set, the current value in Metabase is left as is.
-- `download` (Attributes) The permission definition for downloading data. If not set, the current value in Metabase is left as is. (see [below for nested schema](#nestedatt--download))
+- `data_model` (Attributes) The permission definition for accessing the data model. If not set, the current value in Metabase is left as is. When the permission is revoked, Metabase omits it from its responses, and it is reported as `none`, which is always the case on the free edition. (see [below for nested schema](#nestedatt--data_model))
+- `details` (String) The permission definition for accessing details. If not set, the current value in Metabase is left as is. When the permission is revoked, Metabase omits it from its responses, and it is reported as `no`, which is always the case on the free edition.
+- `download` (Attributes) The permission definition for downloading data. If not set, the current value in Metabase is left as is. When the permission is revoked, Metabase omits it from its responses, and it is reported as `none`. (see [below for nested schema](#nestedatt--download))
 
 ### Read-Only
 
