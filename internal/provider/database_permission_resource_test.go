@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -290,6 +291,112 @@ resource "metabase_database_permission" "blocked" {
 			},
 		},
 	})
+}
+
+// Deletes a group which is not managed by Terraform. Metabase drops the edges of a deleted group from the permissions
+// graph. The resource is considered deleted, so the next apply tries to create it again, and fails.
+func TestAccDatabasePermissionResourceDeletedGroup(t *testing.T) {
+	if os.Getenv(resource.EnvTfAcc) == "" {
+		t.Skipf("Acceptance tests skipped unless env '%s' set", resource.EnvTfAcc)
+	}
+
+	groupId := testAccCreateBystanderGroup(t, "🗑️ Database permission deleted group")
+	config := providerApiKeyConfig + testAccDatabasePermission("deleted", strconv.Itoa(groupId), "query-builder")
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+			},
+			{
+				PreConfig: func() {
+					resp, err := testAccMetabaseClient.DeletePermissionsGroupWithResponse(context.Background(), groupId)
+					if err != nil || resp.StatusCode() != 204 {
+						t.Fatalf("Failed to delete the group: %v", err)
+					}
+				},
+				Config:      config,
+				ExpectError: regexp.MustCompile("Group not found"),
+			},
+		},
+	})
+}
+
+// Deletes a database which is not managed by Terraform. Metabase drops the edges of a deleted database from the
+// permissions graph. The resource is considered deleted, so the next apply tries to create it again, and fails.
+func TestAccDatabasePermissionResourceDeletedDatabase(t *testing.T) {
+	if os.Getenv(resource.EnvTfAcc) == "" {
+		t.Skipf("Acceptance tests skipped unless env '%s' set", resource.EnvTfAcc)
+	}
+
+	databaseId := testAccCreateBystanderDatabase(t, "🗑️ Database permission deleted database")
+	config := providerApiKeyConfig + fmt.Sprintf(`
+resource "metabase_permissions_group" "deleted_database" {
+  name = "🗑️ Database permission deleted database"
+}
+
+resource "metabase_database_permission" "deleted" {
+  group          = metabase_permissions_group.deleted_database.id
+  database       = %d
+  view_data      = "unrestricted"
+  create_queries = "query-builder"
+}
+`, databaseId)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+			},
+			{
+				PreConfig: func() {
+					resp, err := testAccMetabaseClient.DeleteDatabaseWithResponse(context.Background(), databaseId)
+					if err != nil || resp.StatusCode() != 204 {
+						t.Fatalf("Failed to delete the database: %v, %v", err, resp)
+					}
+				},
+				Config:      config,
+				ExpectError: regexp.MustCompile("Database not found"),
+			},
+		},
+	})
+}
+
+// Creates a database directly using the Metabase API, connected to the same PostgreSQL database as Metabase, and returns
+// its ID. The database is deleted at the end of the test, unless it was deleted by the test.
+func testAccCreateBystanderDatabase(t *testing.T, name string) int {
+	t.Helper()
+
+	var details metabase.DatabaseDetails
+	if err := details.FromDatabaseDetailsCustom(metabase.DatabaseDetailsCustom{
+		"host":           os.Getenv("PG_HOST"),
+		"port":           5432,
+		"dbname":         os.Getenv("PG_DATABASE"),
+		"user":           os.Getenv("PG_USER"),
+		"password":       os.Getenv("PG_PASSWORD"),
+		"ssl":            false,
+		"tunnel-enabled": false,
+	}); err != nil {
+		t.Fatalf("Failed to build the database details: %v", err)
+	}
+
+	response, err := testAccMetabaseClient.CreateDatabaseWithResponse(context.Background(), metabase.CreateDatabaseBody{
+		Name:    name,
+		Engine:  "postgres",
+		Details: details,
+	})
+	if err != nil || response.StatusCode() != 200 {
+		t.Fatalf("Failed to create the database: %v, %v", err, response)
+	}
+
+	databaseId := response.JSON200.Id
+	t.Cleanup(func() {
+		_, _ = testAccMetabaseClient.DeleteDatabaseWithResponse(context.Background(), databaseId)
+	})
+
+	return databaseId
 }
 
 // Creates many database permissions at once. Terraform applies them in parallel, which the provider should serialize.
