@@ -1,10 +1,10 @@
 package provider
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strconv"
 
 	"github.com/flovouin/terraform-provider-metabase/internal/graphlock"
@@ -291,24 +291,70 @@ func updateDatabasePermissions(ctx context.Context, client *metabase.ClientWithR
 // last write. See `Read`.
 const writtenDatabasePermissionsPrivateKey = "written_permissions"
 
-// Returns a canonical JSON serialization of the `view-data` and `create-queries` permissions returned by Metabase, such
-// that two responses can be compared.
-func makeComparableDatabasePermissions(p metabase.PermissionsGraphDatabasePermissions) ([]byte, error) {
+// The private state of a resource, as read by `getWrittenDatabasePermissions`.
+type privateStateReader interface {
+	GetKey(ctx context.Context, key string) ([]byte, diag.Diagnostics)
+}
+
+// The private state of a resource, as written by `setWrittenDatabasePermissions`.
+type privateStateWriter interface {
+	SetKey(ctx context.Context, key string, value []byte) diag.Diagnostics
+}
+
+// Returns the `view-data` and `create-queries` permissions stored in the private state after the last write, or `nil` if
+// none are stored.
+func getWrittenDatabasePermissions(ctx context.Context, private privateStateReader) (*metabase.PermissionsGraphDatabasePermissions, diag.Diagnostics) {
+	b, diags := private.GetKey(ctx, writtenDatabasePermissionsPrivateKey)
+	if diags.HasError() || b == nil {
+		return nil, diags
+	}
+
+	var p metabase.PermissionsGraphDatabasePermissions
+	if err := json.Unmarshal(b, &p); err != nil {
+		diags.AddError("Unexpected error reading the written permissions from the private state.", err.Error())
+		return nil, diags
+	}
+
+	return &p, diags
+}
+
+// Stores the `view-data` and `create-queries` permissions returned by Metabase after a write in the private state.
+func setWrittenDatabasePermissions(ctx context.Context, private privateStateWriter, p metabase.PermissionsGraphDatabasePermissions) diag.Diagnostics {
 	b, err := json.Marshal(metabase.PermissionsGraphDatabasePermissions{
 		ViewData:      p.ViewData,
 		CreateQueries: p.CreateQueries,
 	})
 	if err != nil {
-		return nil, err
+		var diags diag.Diagnostics
+		diags.AddError("Unexpected error writing the written permissions to the private state.", err.Error())
+		return diags
 	}
 
-	// Going through a generic value sorts the keys of JSON objects.
-	var v any
-	if err := json.Unmarshal(b, &v); err != nil {
-		return nil, err
+	return private.SetKey(ctx, writtenDatabasePermissionsPrivateKey, b)
+}
+
+// Returns whether the `view-data` and `create-queries` permissions are the same, whatever the order of the keys of JSON
+// objects. Permissions which cannot be compared are considered different.
+func sameDatabasePermissions(a, b metabase.PermissionsGraphDatabasePermissions) bool {
+	// Going through generic values ignores the order of the keys of JSON objects, which are decoded as maps.
+	decode := func(p metabase.PermissionsGraphDatabasePermissions) (any, error) {
+		b, err := json.Marshal(metabase.PermissionsGraphDatabasePermissions{
+			ViewData:      p.ViewData,
+			CreateQueries: p.CreateQueries,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		var v any
+		err = json.Unmarshal(b, &v)
+		return v, err
 	}
 
-	return json.Marshal(v)
+	va, errA := decode(a)
+	vb, errB := decode(b)
+
+	return errA == nil && errB == nil && reflect.DeepEqual(va, vb)
 }
 
 // Converts the permissions of an edge returned by the Metabase API to the Terraform model. Metabase can return JSON
@@ -345,37 +391,36 @@ func withMissingPermissionsRevoked(p metabase.PermissionsGraphDatabasePermission
 	return p
 }
 
-// Sends the permissions defined in the plan to Metabase, and updates the plan with the values returned by Metabase.
-// The optional permissions are only sent when they are set in the configuration. Otherwise, the plan would contain
-// the previous values from the state (or unknown values), which should not be sent back to Metabase.
-// Returns the value to store in the private state (see `Read`).
-func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Context, plan *DatabasePermissionResourceModel, config DatabasePermissionResourceModel) ([]byte, diag.Diagnostics) {
-	var diags diag.Diagnostics
-
-	groupId := plan.Group.ValueInt64()
-	databaseId := plan.Database.ValueInt64()
-
-	diags.Append(checkGroupIsNotAdministrators(groupId)...)
-	// The permissions are checked again, as they may have been unknown when the configuration was validated. The
-	// configuration is checked rather than the plan, which can contain the optional permissions from the state.
-	diags.Append(checkDatabasePermissions(config.DatabasePermissions)...)
-	if diags.HasError() {
-		return nil, diags
-	}
-
-	edge := DatabasePermissions{
+// Makes the permissions to send to Metabase. The optional permissions are only sent when they are set in the
+// configuration: the plan can contain their values from the state (or unknown values), which should not be sent back to
+// Metabase.
+func makeRequestedDatabasePermissions(plan DatabasePermissionResourceModel, config DatabasePermissionResourceModel) DatabasePermissions {
+	return DatabasePermissions{
 		Group:         plan.Group,
 		Database:      plan.Database,
 		ViewData:      plan.ViewData,
 		CreateQueries: plan.CreateQueries,
-		// The optional permissions are only sent when they are set in the configuration. The plan can contain their
-		// values from the state, which should not be sent back to Metabase.
-		Download:  config.Download,
-		DataModel: config.DataModel,
-		Details:   config.Details,
+		Download:      config.Download,
+		DataModel:     config.DataModel,
+		Details:       config.Details,
+	}
+}
+
+// Sends the given permissions of an edge to Metabase, and returns the permissions of the edge after the update.
+func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Context, request DatabasePermissions) (*metabase.PermissionsGraphDatabasePermissions, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	groupId := request.Group.ValueInt64()
+	databaseId := request.Database.ValueInt64()
+
+	diags.Append(checkGroupIsNotAdministrators(groupId)...)
+	// The permissions are checked again, as they may have been unknown when the configuration was validated.
+	diags.Append(checkDatabasePermissions(request)...)
+	if diags.HasError() {
+		return nil, diags
 	}
 
-	permissions, permDiags := makeDatabasePermissionsFromModel(ctx, edge, false)
+	permissions, permDiags := makeDatabasePermissionsFromModel(ctx, request, false)
 	diags.Append(permDiags...)
 	if diags.HasError() {
 		return nil, diags
@@ -387,12 +432,7 @@ func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Contex
 		return nil, diags
 	}
 
-	// The response is the graph after the update, restricted to the group of the edge, so the permissions are read from
-	// it. They have just been written, so the values from the plan are kept.
-	//
-	// TODO: The JSON values from the plan are kept even if Metabase stored different permissions, rather than the same
-	// permissions in a different shape. The response is then stored as the written permissions, so the difference is
-	// never reported. `metabase_permissions_graph` keeps the JSON values of its model in the same way.
+	// The response is the graph after the update, restricted to the group of the edge.
 	updated := findDatabasePermissions(*graph, groupId, databaseId)
 	if updated == nil {
 		diags.AddError(
@@ -402,20 +442,7 @@ func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Contex
 		return nil, diags
 	}
 
-	written, err := makeComparableDatabasePermissions(*updated)
-	if err != nil {
-		diags.AddError("Unexpected error serializing permissions.", err.Error())
-		return nil, diags
-	}
-
-	updatedPermissions, modelDiags := makeDatabasePermissionsModel(ctx, *updated, groupId, databaseId, &plan.DatabasePermissions)
-	diags.Append(modelDiags...)
-	if diags.HasError() {
-		return nil, diags
-	}
-	plan.DatabasePermissions = updatedPermissions
-
-	return written, diags
+	return updated, diags
 }
 
 func (r *DatabasePermissionResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -438,13 +465,24 @@ func (r *DatabasePermissionResource) Create(ctx context.Context, req resource.Cr
 
 	plan.Id = types.StringValue(makeGraphEdgeId(plan.Group.ValueInt64(), strconv.FormatInt(plan.Database.ValueInt64(), 10)))
 
-	written, diags := r.writeDatabasePermissions(ctx, plan, config)
+	updated, diags := r.writeDatabasePermissions(ctx, makeRequestedDatabasePermissions(*plan, config))
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	resp.Diagnostics.Append(resp.Private.SetKey(ctx, writtenDatabasePermissionsPrivateKey, written)...)
+	// The permissions have just been written, so the JSON values of the plan are kept.
+	//
+	// TODO: The JSON values from the plan are kept even if Metabase stored different permissions, rather than the same
+	// permissions in a different shape. The response is then stored as the written permissions, so the difference is
+	// never reported. `metabase_permissions_graph` keeps the JSON values of its model in the same way.
+	plan.DatabasePermissions, diags = makeDatabasePermissionsModel(ctx, *updated, plan.Group.ValueInt64(), plan.Database.ValueInt64(), &plan.DatabasePermissions)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	resp.Diagnostics.Append(setWrittenDatabasePermissions(ctx, resp.Private, *updated)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -456,7 +494,7 @@ func (r *DatabasePermissionResource) Read(ctx context.Context, req resource.Read
 		return
 	}
 
-	written, diags := req.Private.GetKey(ctx, writtenDatabasePermissionsPrivateKey)
+	written, diags := getWrittenDatabasePermissions(ctx, req.Private)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -474,17 +512,11 @@ func (r *DatabasePermissionResource) Read(ctx context.Context, req resource.Read
 		return
 	}
 
-	current, err := makeComparableDatabasePermissions(*permissions)
-	if err != nil {
-		resp.Diagnostics.AddError("Unexpected error serializing permissions.", err.Error())
-		return
-	}
-
 	// The JSON values of the state are kept as long as the response has not changed since the last write. Otherwise,
 	// the permissions were changed outside of Terraform, and the response is used instead, such that the change is
 	// reported.
 	var existing *DatabasePermissions
-	if written == nil || bytes.Equal(written, current) {
+	if written == nil || sameDatabasePermissions(*written, *permissions) {
 		existing = &state.DatabasePermissions
 	}
 
@@ -509,13 +541,20 @@ func (r *DatabasePermissionResource) Update(ctx context.Context, req resource.Up
 		return
 	}
 
-	written, diags := r.writeDatabasePermissions(ctx, plan, config)
+	updated, diags := r.writeDatabasePermissions(ctx, makeRequestedDatabasePermissions(*plan, config))
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	resp.Diagnostics.Append(resp.Private.SetKey(ctx, writtenDatabasePermissionsPrivateKey, written)...)
+	// The permissions have just been written, so the JSON values of the plan are kept (see `Create`).
+	plan.DatabasePermissions, diags = makeDatabasePermissionsModel(ctx, *updated, plan.Group.ValueInt64(), plan.Database.ValueInt64(), &plan.DatabasePermissions)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	resp.Diagnostics.Append(setWrittenDatabasePermissions(ctx, resp.Private, *updated)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -586,12 +625,6 @@ func (r *DatabasePermissionResource) ImportState(ctx context.Context, req resour
 		return
 	}
 
-	written, err := makeComparableDatabasePermissions(*permissions)
-	if err != nil {
-		resp.Diagnostics.AddError("Unexpected error serializing permissions.", err.Error())
-		return
-	}
-
 	// There is no JSON value to keep, so the values of the response are used.
 	edge, diags := makeDatabasePermissionsModel(ctx, *permissions, groupId, databaseIdInt, nil)
 	resp.Diagnostics.Append(diags...)
@@ -604,6 +637,6 @@ func (r *DatabasePermissionResource) ImportState(ctx context.Context, req resour
 		DatabasePermissions: edge,
 	}
 
-	resp.Diagnostics.Append(resp.Private.SetKey(ctx, writtenDatabasePermissionsPrivateKey, written)...)
+	resp.Diagnostics.Append(setWrittenDatabasePermissions(ctx, resp.Private, *permissions)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

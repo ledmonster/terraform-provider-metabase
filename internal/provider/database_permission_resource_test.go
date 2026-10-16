@@ -523,7 +523,7 @@ func TestWriteDatabasePermissionsOnlySendsConfiguredOptionalPermissions(t *testi
 	config.DataModel = types.ObjectNull(accessPermissionsObjectType.AttrTypes)
 	config.Details = types.StringNull()
 
-	_, diags := r.writeDatabasePermissions(context.Background(), &plan, config)
+	_, diags := r.writeDatabasePermissions(context.Background(), makeRequestedDatabasePermissions(plan, config))
 	if diags.HasError() {
 		t.Fatalf("Unexpected error: %v", diags)
 	}
@@ -564,7 +564,7 @@ func TestWriteDatabasePermissionsChecksPermissions(t *testing.T) {
 	config.DataModel = types.ObjectNull(accessPermissionsObjectType.AttrTypes)
 	config.Details = types.StringNull()
 
-	_, diags := r.writeDatabasePermissions(context.Background(), &plan, config)
+	_, diags := r.writeDatabasePermissions(context.Background(), makeRequestedDatabasePermissions(plan, config))
 	checkAttributeError(t, diags, "create_queries", "Invalid permissions for blocked data.")
 
 	if len(fake.acceptedUpdates) != 0 {
@@ -612,7 +612,7 @@ func TestWithMissingPermissionsRevoked(t *testing.T) {
 	}
 }
 
-func TestMakeComparableDatabasePermissions(t *testing.T) {
+func TestSameDatabasePermissions(t *testing.T) {
 	parse := func(s string) metabase.PermissionsGraphDatabasePermissions {
 		var p metabase.PermissionsGraphDatabasePermissions
 		if err := json.Unmarshal([]byte(s), &p); err != nil {
@@ -621,13 +621,79 @@ func TestMakeComparableDatabasePermissions(t *testing.T) {
 		return p
 	}
 
-	a, errA := makeComparableDatabasePermissions(parse(`{"view-data":"unrestricted","create-queries":{"PUBLIC":{"1":"query-builder","2":"no"}},"download":{"schemas":"full"}}`))
-	b, errB := makeComparableDatabasePermissions(parse(`{"create-queries":{"PUBLIC":{"2":"no","1":"query-builder"}},"view-data":"unrestricted"}`))
-	if errA != nil || errB != nil {
-		t.Fatalf("Unexpected errors: %v, %v", errA, errB)
+	tests := map[string]struct {
+		a        string
+		b        string
+		expected bool
+	}{
+		"key order and other permissions ignored": {
+			a:        `{"view-data":"unrestricted","create-queries":{"PUBLIC":{"1":"query-builder","2":"no"}},"download":{"schemas":"full"}}`,
+			b:        `{"create-queries":{"PUBLIC":{"2":"no","1":"query-builder"}},"view-data":"unrestricted"}`,
+			expected: true,
+		},
+		"different create queries": {
+			a:        `{"view-data":"unrestricted","create-queries":"query-builder"}`,
+			b:        `{"view-data":"unrestricted","create-queries":"query-builder-and-native"}`,
+			expected: false,
+		},
+		"missing create queries": {
+			a:        `{"view-data":"unrestricted","create-queries":"query-builder"}`,
+			b:        `{"view-data":"unrestricted"}`,
+			expected: false,
+		},
+		"reshaped view data": {
+			a:        `{"view-data":{"PUBLIC":"unrestricted"}}`,
+			b:        `{"view-data":"unrestricted"}`,
+			expected: false,
+		},
 	}
-	if string(a) != string(b) {
-		t.Errorf("Expected the key order and other permissions to be ignored, got %s and %s.", a, b)
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			if actual := sameDatabasePermissions(parse(test.a), parse(test.b)); actual != test.expected {
+				t.Errorf("Expected %t, got %t.", test.expected, actual)
+			}
+		})
+	}
+}
+
+// A private state storing its values in memory.
+type fakePrivateState map[string][]byte
+
+func (f fakePrivateState) GetKey(ctx context.Context, key string) ([]byte, diag.Diagnostics) {
+	return f[key], nil
+}
+
+func (f fakePrivateState) SetKey(ctx context.Context, key string, value []byte) diag.Diagnostics {
+	f[key] = value
+	return nil
+}
+
+func TestWrittenDatabasePermissions(t *testing.T) {
+	private := fakePrivateState{}
+
+	written, diags := getWrittenDatabasePermissions(context.Background(), private)
+	if diags.HasError() || written != nil {
+		t.Fatalf("Expected no written permissions, got %v (%v).", written, diags)
+	}
+
+	var p metabase.PermissionsGraphDatabasePermissions
+	if err := json.Unmarshal([]byte(`{"view-data":"unrestricted","create-queries":{"PUBLIC":{"1":"query-builder"}},"download":{"schemas":"full"}}`), &p); err != nil {
+		t.Fatalf("Failed to parse permissions: %v", err)
+	}
+	if diags := setWrittenDatabasePermissions(context.Background(), private, p); diags.HasError() {
+		t.Fatalf("Unexpected error: %v", diags)
+	}
+
+	written, diags = getWrittenDatabasePermissions(context.Background(), private)
+	if diags.HasError() || written == nil {
+		t.Fatalf("Expected written permissions, got %v (%v).", written, diags)
+	}
+	if !sameDatabasePermissions(*written, p) {
+		t.Errorf("Expected the written permissions to be the same as the stored ones, got %s.", private[writtenDatabasePermissionsPrivateKey])
+	}
+	if written.Download != nil {
+		t.Errorf("Expected only view-data and create-queries to be stored, got %s.", private[writtenDatabasePermissionsPrivateKey])
 	}
 }
 
