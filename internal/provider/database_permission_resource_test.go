@@ -508,7 +508,7 @@ func TestWriteDatabasePermissionsOnlySendsConfiguredOptionalPermissions(t *testi
 	previousDownload := types.ObjectValueMust(accessPermissionsObjectType.AttrTypes, map[string]attr.Value{
 		"schemas": types.StringValue("full"),
 	})
-	plan := DatabasePermissionResourceModel{
+	plan := DatabasePermissionResourceModel{DatabasePermissions: DatabasePermissions{
 		Group:         types.Int64Value(3),
 		Database:      types.Int64Value(1),
 		ViewData:      types.StringValue("unrestricted"),
@@ -517,7 +517,7 @@ func TestWriteDatabasePermissionsOnlySendsConfiguredOptionalPermissions(t *testi
 		Download:  previousDownload,
 		DataModel: types.ObjectUnknown(accessPermissionsObjectType.AttrTypes),
 		Details:   types.StringUnknown(),
-	}
+	}}
 	config := plan
 	config.Download = types.ObjectNull(accessPermissionsObjectType.AttrTypes)
 	config.DataModel = types.ObjectNull(accessPermissionsObjectType.AttrTypes)
@@ -550,7 +550,7 @@ func TestWriteDatabasePermissionsChecksPermissions(t *testing.T) {
 		permissionsGraph: graphlock.NewPermissionsGraphTracker(),
 	}}}
 
-	plan := DatabasePermissionResourceModel{
+	plan := DatabasePermissionResourceModel{DatabasePermissions: DatabasePermissions{
 		Group:         types.Int64Value(3),
 		Database:      types.Int64Value(1),
 		ViewData:      types.StringValue("blocked"),
@@ -558,7 +558,7 @@ func TestWriteDatabasePermissionsChecksPermissions(t *testing.T) {
 		Download:      types.ObjectUnknown(accessPermissionsObjectType.AttrTypes),
 		DataModel:     types.ObjectUnknown(accessPermissionsObjectType.AttrTypes),
 		Details:       types.StringUnknown(),
-	}
+	}}
 	config := plan
 	config.Download = types.ObjectNull(accessPermissionsObjectType.AttrTypes)
 	config.DataModel = types.ObjectNull(accessPermissionsObjectType.AttrTypes)
@@ -704,7 +704,7 @@ func TestCheckDatabasePermissions(t *testing.T) {
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			diags := checkDatabasePermissions(DatabasePermissionResourceModel{
+			diags := checkDatabasePermissions(DatabasePermissions{
 				ViewData:      test.viewData,
 				CreateQueries: test.createQueries,
 				Download:      test.download,

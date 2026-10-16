@@ -42,14 +42,8 @@ type DatabasePermissionResource struct {
 // The Terraform model for a single edge of the permissions graph.
 // Apart from the ID, the attributes are the same as an edge in the `metabase_permissions_graph` resource.
 type DatabasePermissionResourceModel struct {
-	Id            types.String `tfsdk:"id"`             // The ID of the edge, as `<group>/<database>`.
-	Group         types.Int64  `tfsdk:"group"`          // The ID of the permissions group to which the permission applies.
-	Database      types.Int64  `tfsdk:"database"`       // The ID of the database to which the permission applies.
-	ViewData      types.String `tfsdk:"view_data"`      // View data access permission.
-	CreateQueries types.String `tfsdk:"create_queries"` // Create queries access permission.
-	Download      types.Object `tfsdk:"download"`       // Download-related permission.
-	DataModel     types.Object `tfsdk:"data_model"`     // Data-model-related permission.
-	Details       types.String `tfsdk:"details"`        // Details permission.
+	Id types.String `tfsdk:"id"` // The ID of the edge, as `<group>/<database>`.
+	DatabasePermissions
 }
 
 func (r *DatabasePermissionResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
@@ -141,32 +135,32 @@ Permissions for the Administrators group (ID ` + "`2`" + `) cannot be changed, a
 }
 
 func (r *DatabasePermissionResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
-	var data DatabasePermissionResourceModel
+	var config DatabasePermissionResourceModel
 
-	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	// The group may only be known during the apply, in which case it is checked when creating the resource.
-	if !data.Group.IsNull() && !data.Group.IsUnknown() {
-		resp.Diagnostics.Append(checkGroupIsNotAdministrators(data.Group.ValueInt64())...)
+	if !config.Group.IsNull() && !config.Group.IsUnknown() {
+		resp.Diagnostics.Append(checkGroupIsNotAdministrators(config.Group.ValueInt64())...)
 	}
 
-	resp.Diagnostics.Append(checkDatabasePermissions(data)...)
+	resp.Diagnostics.Append(checkDatabasePermissions(config.DatabasePermissions)...)
 }
 
 // Returns errors for the combinations of permissions which Metabase changes when they are applied, and which would then
 // differ from the configuration after the apply. When `view_data` is set to `blocked` for the entire database, Metabase
 // revokes `create-queries` and `download`.
-func checkDatabasePermissions(data DatabasePermissionResourceModel) diag.Diagnostics {
+func checkDatabasePermissions(permissions DatabasePermissions) diag.Diagnostics {
 	var diags diag.Diagnostics
 
-	if data.ViewData.IsUnknown() || data.ViewData.ValueString() != string(metabase.PermissionsGraphDatabasePermissionsViewData0Blocked) {
+	if permissions.ViewData.IsUnknown() || permissions.ViewData.ValueString() != string(metabase.PermissionsGraphDatabasePermissionsViewData0Blocked) {
 		return diags
 	}
 
-	if !data.CreateQueries.IsUnknown() && data.CreateQueries.ValueString() != string(metabase.PermissionsGraphDatabasePermissionsCreateQueries0No) {
+	if !permissions.CreateQueries.IsUnknown() && permissions.CreateQueries.ValueString() != string(metabase.PermissionsGraphDatabasePermissionsCreateQueries0No) {
 		diags.AddAttributeError(
 			path.Root("create_queries"),
 			"Invalid permissions for blocked data.",
@@ -174,8 +168,8 @@ func checkDatabasePermissions(data DatabasePermissionResourceModel) diag.Diagnos
 		)
 	}
 
-	if !data.Download.IsNull() && !data.Download.IsUnknown() {
-		schemas, ok := data.Download.Attributes()["schemas"].(types.String)
+	if !permissions.Download.IsNull() && !permissions.Download.IsUnknown() {
+		schemas, ok := permissions.Download.Attributes()["schemas"].(types.String)
 		if ok && !schemas.IsUnknown() && schemas.ValueString() != string(metabase.PermissionsGraphDatabaseAccessSchemas0None) {
 			diags.AddAttributeError(
 				path.Root("download"),
@@ -294,7 +288,7 @@ func updateDatabasePermissions(ctx context.Context, client *metabase.ClientWithR
 }
 
 // The key in the private state storing the `view-data` and `create-queries` permissions returned by Metabase after the
-// last write. See `updateModelFromDatabasePermissions`.
+// last write. See `Read`.
 const writtenDatabasePermissionsPrivateKey = "written_permissions"
 
 // Returns a canonical JSON serialization of the `view-data` and `create-queries` permissions returned by Metabase, such
@@ -317,50 +311,19 @@ func makeComparableDatabasePermissions(p metabase.PermissionsGraphDatabasePermis
 	return json.Marshal(v)
 }
 
-// Updates the model from the permissions of its edge returned by the Metabase API. Returns the comparable permissions
-// from the response, which should be stored in the private state after a write.
-//
-// Metabase can return JSON permissions in a different but equivalent shape (e.g. collapsing a uniform object to a
-// single value). To avoid a perpetual diff, the JSON values of the model are kept, as long as the response has not
-// changed since the last write (`written`). If it has, the permissions were changed outside of Terraform, and the
-// response is used instead, such that the change is reported. If `written` is `nil`, the model values are kept.
-func updateModelFromDatabasePermissions(ctx context.Context, permissions metabase.PermissionsGraphDatabasePermissions, written []byte, data *DatabasePermissionResourceModel) ([]byte, diag.Diagnostics) {
-	var diags diag.Diagnostics
-
-	groupId := data.Group.ValueInt64()
-	databaseId := data.Database.ValueInt64()
-
-	current, err := makeComparableDatabasePermissions(permissions)
-	if err != nil {
-		diags.AddError("Unexpected error serializing permissions.", err.Error())
-		return nil, diags
-	}
-
-	// Passing the existing model allows keeping the serialization of JSON permissions when Metabase reshapes them. Only
-	// `view_data` and `create_queries` can be JSON.
-	var existing *DatabasePermissions
-	if written == nil || bytes.Equal(written, current) {
-		existing = &DatabasePermissions{ViewData: data.ViewData, CreateQueries: data.CreateQueries}
-	}
-	edgeObject, objDiags := makePermissionsObjectFromDatabasePermissions(ctx, int(groupId), int(databaseId), withMissingPermissionsRevoked(permissions), existing)
-	diags.Append(objDiags...)
+// Converts the permissions of an edge returned by the Metabase API to the Terraform model. Metabase can return JSON
+// permissions in a different but equivalent shape (e.g. collapsing a uniform object to a single value). When `shape` is
+// not `nil`, its JSON values of `view_data` and `create_queries` are kept, to avoid a perpetual diff.
+func makeDatabasePermissionsModel(ctx context.Context, p metabase.PermissionsGraphDatabasePermissions, groupId int64, databaseId int64, shape *DatabasePermissions) (DatabasePermissions, diag.Diagnostics) {
+	edgeObject, diags := makePermissionsObjectFromDatabasePermissions(ctx, int(groupId), int(databaseId), withMissingPermissionsRevoked(p), shape)
 	if diags.HasError() {
-		return nil, diags
+		return DatabasePermissions{}, diags
 	}
 
 	var edge DatabasePermissions
 	diags.Append(edgeObject.As(ctx, &edge, basetypes.ObjectAsOptions{})...)
-	if diags.HasError() {
-		return nil, diags
-	}
 
-	data.ViewData = edge.ViewData
-	data.CreateQueries = edge.CreateQueries
-	data.Download = edge.Download
-	data.DataModel = edge.DataModel
-	data.Details = edge.Details
-
-	return current, diags
+	return edge, diags
 }
 
 // Returns the given permissions, with the missing `download`, `data-model` and `details` permissions set to their revoked
@@ -385,26 +348,26 @@ func withMissingPermissionsRevoked(p metabase.PermissionsGraphDatabasePermission
 // Sends the permissions defined in the plan to Metabase, and updates the plan with the values returned by Metabase.
 // The optional permissions are only sent when they are set in the configuration. Otherwise, the plan would contain
 // the previous values from the state (or unknown values), which should not be sent back to Metabase.
-// Returns the value to store in the private state (see `updateModelFromDatabasePermissions`).
-func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Context, data *DatabasePermissionResourceModel, config DatabasePermissionResourceModel) ([]byte, diag.Diagnostics) {
+// Returns the value to store in the private state (see `Read`).
+func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Context, plan *DatabasePermissionResourceModel, config DatabasePermissionResourceModel) ([]byte, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
-	groupId := data.Group.ValueInt64()
-	databaseId := data.Database.ValueInt64()
+	groupId := plan.Group.ValueInt64()
+	databaseId := plan.Database.ValueInt64()
 
 	diags.Append(checkGroupIsNotAdministrators(groupId)...)
 	// The permissions are checked again, as they may have been unknown when the configuration was validated. The
 	// configuration is checked rather than the plan, which can contain the optional permissions from the state.
-	diags.Append(checkDatabasePermissions(config)...)
+	diags.Append(checkDatabasePermissions(config.DatabasePermissions)...)
 	if diags.HasError() {
 		return nil, diags
 	}
 
 	edge := DatabasePermissions{
-		Group:         data.Group,
-		Database:      data.Database,
-		ViewData:      data.ViewData,
-		CreateQueries: data.CreateQueries,
+		Group:         plan.Group,
+		Database:      plan.Database,
+		ViewData:      plan.ViewData,
+		CreateQueries: plan.CreateQueries,
 		// The optional permissions are only sent when they are set in the configuration. The plan can contain their
 		// values from the state, which should not be sent back to Metabase.
 		Download:  config.Download,
@@ -439,17 +402,27 @@ func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Contex
 		return nil, diags
 	}
 
-	written, modelDiags := updateModelFromDatabasePermissions(ctx, *updated, nil, data)
+	written, err := makeComparableDatabasePermissions(*updated)
+	if err != nil {
+		diags.AddError("Unexpected error serializing permissions.", err.Error())
+		return nil, diags
+	}
+
+	updatedPermissions, modelDiags := makeDatabasePermissionsModel(ctx, *updated, groupId, databaseId, &plan.DatabasePermissions)
 	diags.Append(modelDiags...)
+	if diags.HasError() {
+		return nil, diags
+	}
+	plan.DatabasePermissions = updatedPermissions
 
 	return written, diags
 }
 
 func (r *DatabasePermissionResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var data *DatabasePermissionResourceModel
+	var plan *DatabasePermissionResourceModel
 	var config DatabasePermissionResourceModel
 
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -457,28 +430,28 @@ func (r *DatabasePermissionResource) Create(ctx context.Context, req resource.Cr
 
 	// The group and the database can only change when the resource is created, as they require a replacement. Both are
 	// checked, such that all the errors are reported at once.
-	resp.Diagnostics.Append(checkPermissionsGroupExists(ctx, r.client, data.Group.ValueInt64())...)
-	resp.Diagnostics.Append(checkDatabaseExists(ctx, r.client, data.Database.ValueInt64())...)
+	resp.Diagnostics.Append(checkPermissionsGroupExists(ctx, r.client, plan.Group.ValueInt64())...)
+	resp.Diagnostics.Append(checkDatabaseExists(ctx, r.client, plan.Database.ValueInt64())...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	data.Id = types.StringValue(makeGraphEdgeId(data.Group.ValueInt64(), strconv.FormatInt(data.Database.ValueInt64(), 10)))
+	plan.Id = types.StringValue(makeGraphEdgeId(plan.Group.ValueInt64(), strconv.FormatInt(plan.Database.ValueInt64(), 10)))
 
-	written, diags := r.writeDatabasePermissions(ctx, data, config)
+	written, diags := r.writeDatabasePermissions(ctx, plan, config)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	resp.Diagnostics.Append(resp.Private.SetKey(ctx, writtenDatabasePermissionsPrivateKey, written)...)
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
 func (r *DatabasePermissionResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var data *DatabasePermissionResourceModel
+	var state *DatabasePermissionResourceModel
 
-	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -489,7 +462,7 @@ func (r *DatabasePermissionResource) Read(ctx context.Context, req resource.Read
 		return
 	}
 
-	permissions, diags := getDatabasePermissions(ctx, r.client, data.Group.ValueInt64(), data.Database.ValueInt64())
+	permissions, diags := getDatabasePermissions(ctx, r.client, state.Group.ValueInt64(), state.Database.ValueInt64())
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -501,7 +474,21 @@ func (r *DatabasePermissionResource) Read(ctx context.Context, req resource.Read
 		return
 	}
 
-	_, diags = updateModelFromDatabasePermissions(ctx, *permissions, written, data)
+	current, err := makeComparableDatabasePermissions(*permissions)
+	if err != nil {
+		resp.Diagnostics.AddError("Unexpected error serializing permissions.", err.Error())
+		return
+	}
+
+	// The JSON values of the state are kept as long as the response has not changed since the last write. Otherwise,
+	// the permissions were changed outside of Terraform, and the response is used instead, such that the change is
+	// reported.
+	var shape *DatabasePermissions
+	if written == nil || bytes.Equal(written, current) {
+		shape = &state.DatabasePermissions
+	}
+
+	state.DatabasePermissions, diags = makeDatabasePermissionsModel(ctx, *permissions, state.Group.ValueInt64(), state.Database.ValueInt64(), shape)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -509,39 +496,39 @@ func (r *DatabasePermissionResource) Read(ctx context.Context, req resource.Read
 
 	// The private state is left as is: it should only change when the permissions are written. This way, changes made
 	// outside of Terraform keep being reported until they are reverted.
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
 func (r *DatabasePermissionResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var data *DatabasePermissionResourceModel
+	var plan *DatabasePermissionResourceModel
 	var config DatabasePermissionResourceModel
 
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	written, diags := r.writeDatabasePermissions(ctx, data, config)
+	written, diags := r.writeDatabasePermissions(ctx, plan, config)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	resp.Diagnostics.Append(resp.Private.SetKey(ctx, writtenDatabasePermissionsPrivateKey, written)...)
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
 func (r *DatabasePermissionResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var data *DatabasePermissionResourceModel
+	var state *DatabasePermissionResourceModel
 
-	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	groupId := data.Group.ValueInt64()
-	databaseId := data.Database.ValueInt64()
+	groupId := state.Group.ValueInt64()
+	databaseId := state.Database.ValueInt64()
 
 	permissions, diags := getDatabasePermissions(ctx, r.client, groupId, databaseId)
 	resp.Diagnostics.Append(diags...)
@@ -599,20 +586,22 @@ func (r *DatabasePermissionResource) ImportState(ctx context.Context, req resour
 		return
 	}
 
-	var data DatabasePermissionResourceModel
-	data.Id = types.StringValue(makeGraphEdgeId(groupId, databaseId))
-	data.Group = types.Int64Value(groupId)
-	data.Database = types.Int64Value(databaseIdInt)
-	data.ViewData = types.StringNull()
-	data.CreateQueries = types.StringNull()
-	data.Download = types.ObjectNull(accessPermissionsObjectType.AttrTypes)
-	data.DataModel = types.ObjectNull(accessPermissionsObjectType.AttrTypes)
-	data.Details = types.StringNull()
+	written, err := makeComparableDatabasePermissions(*permissions)
+	if err != nil {
+		resp.Diagnostics.AddError("Unexpected error serializing permissions.", err.Error())
+		return
+	}
 
-	written, diags := updateModelFromDatabasePermissions(ctx, *permissions, nil, &data)
+	// There is no JSON value to keep, so the values of the response are used.
+	edge, diags := makeDatabasePermissionsModel(ctx, *permissions, groupId, databaseIdInt, nil)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	data := DatabasePermissionResourceModel{
+		Id:                  types.StringValue(makeGraphEdgeId(groupId, databaseId)),
+		DatabasePermissions: edge,
 	}
 
 	resp.Diagnostics.Append(resp.Private.SetKey(ctx, writtenDatabasePermissionsPrivateKey, written)...)
