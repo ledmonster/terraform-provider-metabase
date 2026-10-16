@@ -418,6 +418,7 @@ func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Contex
 		return nil, diags
 	}
 
+	// `false` leaves the optional permissions which are not set out of the request, rather than revoking them.
 	permissions, permDiags := makeDatabasePermissionsFromModel(ctx, request, false)
 	diags.Append(permDiags...)
 	if diags.HasError() {
