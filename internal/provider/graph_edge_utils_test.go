@@ -127,8 +127,8 @@ func mustParseInt64(t *testing.T, s string) int64 {
 }
 
 // A fake Metabase API serving permissions groups, collections, databases and the permissions graph. Like Metabase, it
-// rejects updates of the graph made from an outdated revision with a 409 status, and only updates the edges present in
-// the request.
+// rejects updates of the graph made from an outdated revision with a 409 status unless they are forced, only updates
+// the edges present in the request, and responds with the graph of the groups present in the request.
 type fakeMetabaseServer struct {
 	mutex sync.Mutex
 	// The IDs of the permissions groups which do not exist. All the other groups exist.
@@ -176,6 +176,16 @@ func (f *fakeMetabaseServer) handle(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodGet {
 		http.NotFound(w, r)
+		return
+	}
+
+	if groupId, ok := strings.CutPrefix(r.URL.Path, "/permissions/graph/group/"); ok {
+		// Like Metabase, the graph is empty for a group which does not exist.
+		groups := map[string]map[string]json.RawMessage{}
+		if edges, exists := f.permissionsGraph[groupId]; exists && !f.missingGroups[groupId] {
+			groups[groupId] = edges
+		}
+		writeFakePermissionsGraph(w, f.permissionsGraphRevision, groups)
 		return
 	}
 
@@ -227,7 +237,7 @@ func (f *fakeMetabaseServer) handlePermissionsGraph(w http.ResponseWriter, r *ht
 			return
 		}
 
-		if body.Revision != f.permissionsGraphRevision {
+		if r.URL.Query().Get("force") != "true" && body.Revision != f.permissionsGraphRevision {
 			http.Error(w, "Looks like someone else edited the permissions and your data is out of date.", http.StatusConflict)
 			return
 		}
@@ -243,8 +253,12 @@ func (f *fakeMetabaseServer) handlePermissionsGraph(w http.ResponseWriter, r *ht
 		f.permissionsGraphRevision++
 		f.acceptedUpdates = append(f.acceptedUpdates, body.Groups)
 
-		// Like Metabase, only the edges that were sent are returned.
-		writeFakePermissionsGraph(w, f.permissionsGraphRevision, body.Groups)
+		// Like Metabase, all the edges of the groups that were sent are returned.
+		groups := map[string]map[string]json.RawMessage{}
+		for groupId := range body.Groups {
+			groups[groupId] = f.permissionsGraph[groupId]
+		}
+		writeFakePermissionsGraph(w, f.permissionsGraphRevision, groups)
 	default:
 		http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
 	}
