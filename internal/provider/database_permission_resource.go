@@ -316,7 +316,7 @@ func updateDatabasePermissions(ctx context.Context, client *metabase.ClientWithR
 }
 
 // The key in the private state storing the `view-data` and `create-queries` permissions returned by Metabase after the
-// last write. See `readDatabasePermissions`.
+// last write. See `updateModelFromDatabasePermissions`.
 const writtenDatabasePermissionsPrivateKey = "written_permissions"
 
 // Returns a canonical JSON serialization of the `view-data` and `create-queries` permissions returned by Metabase, such
@@ -406,7 +406,7 @@ func keepRevokedAccessPermissions(read types.Object, model types.Object) types.O
 // Sends the permissions defined in the plan to Metabase, and updates the plan with the values returned by Metabase.
 // The optional permissions are only sent when they are set in the configuration. Otherwise, the plan would contain
 // the previous values from the state (or unknown values), which should not be sent back to Metabase.
-// Returns the value to store in the private state (see `readDatabasePermissions`).
+// Returns the value to store in the private state (see `updateModelFromDatabasePermissions`).
 func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Context, data *DatabasePermissionResourceModel, config DatabasePermissionResourceModel) ([]byte, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
