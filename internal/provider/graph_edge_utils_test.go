@@ -225,8 +225,6 @@ func (f *fakeMetabaseServer) handle(w http.ResponseWriter, r *http.Request) {
 
 func (f *fakeMetabaseServer) handlePermissionsGraph(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodGet:
-		writeFakePermissionsGraph(w, f.permissionsGraphRevision, f.permissionsGraph)
 	case http.MethodPut:
 		var body struct {
 			Revision int                                   `json:"revision"`
