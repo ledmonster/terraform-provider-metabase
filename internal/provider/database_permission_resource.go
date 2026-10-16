@@ -214,18 +214,19 @@ func checkDatabasePermissions(data DatabasePermissionResourceModel) diag.Diagnos
 	return diags
 }
 
-// When the optional permissions are not set in the configuration, their values from the state are used in the plan
-// (see the `UseStateForUnknown` plan modifiers). However Metabase revokes the `download` permission when `view-data` is
-// set to `blocked`, so it is marked as unknown instead when `view_data` changes, unless it becomes `unrestricted`.
+// Checks that the group and the database exist when the resource is created, such that a wrong ID is reported by the
+// plan rather than during the apply. They can only change when the resource is created, as they require a replacement.
+//
+// When the resource is updated, marks `download` as unknown if Metabase may revoke it. When the optional permissions
+// are not set in the configuration, their values from the state are used in the plan (see the `UseStateForUnknown`
+// plan modifiers). However Metabase revokes the `download` permission when `view-data` is set to `blocked`, so it is
+// marked as unknown instead when `view_data` changes, unless it becomes `unrestricted`.
 func (r *DatabasePermissionResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	// Nothing to do when deleting the resource.
 	if req.Plan.Raw.IsNull() {
 		return
 	}
 
-	// The group and the database can only change when the resource is created, as they require a replacement. They are
-	// checked by the plan, such that a wrong ID is reported before the apply, unless it is unknown (e.g. when the group
-	// or the database is created in the same apply), in which case it is checked when creating the resource.
 	if req.State.Raw.IsNull() {
 		var plan DatabasePermissionResourceModel
 		resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -233,6 +234,8 @@ func (r *DatabasePermissionResource) ModifyPlan(ctx context.Context, req resourc
 			return
 		}
 
+		// The IDs are unknown when the group or the database is created in the same apply, in which case they are
+		// checked when creating the resource.
 		if !plan.Group.IsUnknown() {
 			resp.Diagnostics.Append(checkPermissionsGroupExists(ctx, r.client, plan.Group.ValueInt64())...)
 		}
