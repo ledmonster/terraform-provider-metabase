@@ -496,6 +496,55 @@ func TestAccDatabasePermissionResourceDrift(t *testing.T) {
 	})
 }
 
+// Metabase drops the edges of deleted groups and databases from the graph, which is how the resource is considered
+// deleted.
+func TestGetDatabasePermissions(t *testing.T) {
+	fake, client := newFakeMetabaseServer(t)
+	fake.permissionsGraph["3"] = map[string]json.RawMessage{
+		"1": json.RawMessage(`{"view-data":"unrestricted","create-queries":"query-builder"}`),
+		"2": json.RawMessage(`{}`),
+	}
+	fake.permissionsGraph["4"] = map[string]json.RawMessage{
+		"1": json.RawMessage(`{"view-data":"unrestricted"}`),
+	}
+	fake.missingGroups["4"] = true
+
+	tests := map[string]struct {
+		group         int64
+		database      int64
+		createQueries string
+	}{
+		"existing edge":           {group: 3, database: 1, createQueries: "query-builder"},
+		"edge without view data":  {group: 3, database: 2},
+		"missing database":        {group: 3, database: 9},
+		"group which was deleted": {group: 4, database: 1},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			permissions, diags := getDatabasePermissions(context.Background(), client, test.group, test.database)
+			if diags.HasError() {
+				t.Fatalf("Unexpected error: %v", diags)
+			}
+
+			if test.createQueries == "" {
+				if permissions != nil {
+					t.Errorf("Expected no permissions, got %v.", permissions)
+				}
+				return
+			}
+
+			if permissions == nil || permissions.CreateQueries == nil {
+				t.Fatalf("Expected permissions, got %v.", permissions)
+			}
+			createQueries, err := permissions.CreateQueries.AsPermissionsGraphDatabasePermissionsCreateQueries0()
+			if err != nil || string(createQueries) != test.createQueries {
+				t.Errorf("Expected create-queries %q, got %q (%v).", test.createQueries, createQueries, err)
+			}
+		})
+	}
+}
+
 func TestWriteDatabasePermissionsOnlySendsConfiguredOptionalPermissions(t *testing.T) {
 	fake, client := newFakeMetabaseServer(t)
 	// The update is forced, so it is accepted even though the graph has changed since revision 0.
