@@ -496,13 +496,13 @@ func TestAccDatabasePermissionResourceDrift(t *testing.T) {
 	})
 }
 
-// Metabase drops the edges of deleted groups and databases from the graph, which is how the resource is considered
-// deleted.
+// Reads the graph restricted to the group of the edge. Metabase drops the edges of deleted groups and databases from the
+// graph, which is how the resource is considered deleted. The edges themselves are found by
+// `metabase.PermissionsGraph.FindDatabasePermissions`.
 func TestGetDatabasePermissions(t *testing.T) {
 	fake, client := newFakeMetabaseServer(t)
 	fake.permissionsGraph["3"] = map[string]json.RawMessage{
 		"1": json.RawMessage(`{"view-data":"unrestricted","create-queries":"query-builder"}`),
-		"2": json.RawMessage(`{}`),
 	}
 	fake.permissionsGraph["4"] = map[string]json.RawMessage{
 		"1": json.RawMessage(`{"view-data":"unrestricted"}`),
@@ -515,8 +515,6 @@ func TestGetDatabasePermissions(t *testing.T) {
 		createQueries string
 	}{
 		"existing edge":           {group: 3, database: 1, createQueries: "query-builder"},
-		"edge without view data":  {group: 3, database: 2},
-		"missing database":        {group: 3, database: 9},
 		"group which was deleted": {group: 4, database: 1},
 	}
 

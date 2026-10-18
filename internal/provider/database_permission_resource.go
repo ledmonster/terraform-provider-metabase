@@ -230,24 +230,8 @@ func (r *DatabasePermissionResource) ModifyPlan(ctx context.Context, req resourc
 	resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
 }
 
-// Returns the permissions for the given group and database in the graph, or `nil` if the graph does not contain it or
-// if it does not define the `view-data` permission.
-func findDatabasePermissions(g metabase.PermissionsGraph, groupId int64, databaseId int64) *metabase.PermissionsGraphDatabasePermissions {
-	dbPermissionsMap, ok := g.Groups[strconv.FormatInt(groupId, 10)]
-	if !ok {
-		return nil
-	}
-
-	dbPermissions, ok := dbPermissionsMap[strconv.FormatInt(databaseId, 10)]
-	if !ok || !dbPermissions.HasViewData() {
-		return nil
-	}
-
-	return &dbPermissions
-}
-
 // Reads the permissions for a single edge from the permissions graph restricted to its group (see
-// `findDatabasePermissions`). The graph is empty when the group does not exist.
+// `metabase.PermissionsGraph.FindDatabasePermissions`). The graph is empty when the group does not exist.
 func getDatabasePermissions(ctx context.Context, client *metabase.ClientWithResponses, groupId int64, databaseId int64) (*metabase.PermissionsGraphDatabasePermissions, diag.Diagnostics) {
 	getResp, err := client.GetPermissionsGraphForGroupWithResponse(ctx, int(groupId))
 
@@ -256,7 +240,7 @@ func getDatabasePermissions(ctx context.Context, client *metabase.ClientWithResp
 		return nil, diags
 	}
 
-	return findDatabasePermissions(*getResp.JSON200, groupId, databaseId), diags
+	return getResp.JSON200.FindDatabasePermissions(int(groupId), int(databaseId)), diags
 }
 
 // Sends the given permissions for a single edge of the permissions graph, leaving all other edges untouched. The
@@ -397,7 +381,7 @@ func (r *DatabasePermissionResource) writeDatabasePermissions(ctx context.Contex
 	}
 
 	// The response is the graph after the update, restricted to the group of the edge.
-	updated := findDatabasePermissions(*graph, groupId, databaseId)
+	updated := graph.FindDatabasePermissions(int(groupId), int(databaseId))
 	if updated == nil {
 		diags.AddError(
 			"Permissions not found after update.",

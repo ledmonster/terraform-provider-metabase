@@ -1,5 +1,7 @@
 package metabase
 
+import "strconv"
+
 // This file defines constructors for the union types of the permissions graph, for the values which apply to an entire
 // database. Setting such a value marshals a string, which cannot fail.
 //
@@ -98,4 +100,20 @@ func (p PermissionsGraphDatabasePermissions) WithOmittedPermissionsRevoked() Per
 	}
 
 	return p
+}
+
+// Returns the permissions of the given group on the given database, or `nil` if the graph does not contain them, or if
+// they do not define the `view-data` permission.
+func (g PermissionsGraph) FindDatabasePermissions(groupId int, databaseId int) *PermissionsGraphDatabasePermissions {
+	dbPermissionsMap, ok := g.Groups[strconv.Itoa(groupId)]
+	if !ok {
+		return nil
+	}
+
+	dbPermissions, ok := dbPermissionsMap[strconv.Itoa(databaseId)]
+	if !ok || !dbPermissions.HasViewData() {
+		return nil
+	}
+
+	return &dbPermissions
 }

@@ -113,3 +113,46 @@ func TestWithOmittedPermissionsRevoked(t *testing.T) {
 		})
 	}
 }
+
+func TestFindDatabasePermissions(t *testing.T) {
+	t.Parallel()
+
+	var graph PermissionsGraph
+	if err := json.Unmarshal([]byte(`{"revision":1,"groups":{"3":{"1":{"view-data":"unrestricted","create-queries":"query-builder"},"2":{}}}}`), &graph); err != nil {
+		t.Fatalf("Failed to parse the graph: %v", err)
+	}
+
+	tests := map[string]struct {
+		groupId       int
+		databaseId    int
+		createQueries string
+	}{
+		"existing edge":          {groupId: 3, databaseId: 1, createQueries: "query-builder"},
+		"edge without view data": {groupId: 3, databaseId: 2},
+		"missing database":       {groupId: 3, databaseId: 9},
+		"missing group":          {groupId: 4, databaseId: 1},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			permissions := graph.FindDatabasePermissions(test.groupId, test.databaseId)
+
+			if test.createQueries == "" {
+				if permissions != nil {
+					t.Errorf("Expected no permissions, got %v.", permissions)
+				}
+				return
+			}
+
+			if permissions == nil || permissions.CreateQueries == nil {
+				t.Fatalf("Expected permissions, got %v.", permissions)
+			}
+			createQueries, err := permissions.CreateQueries.AsPermissionsGraphDatabasePermissionsCreateQueries0()
+			if err != nil || string(createQueries) != test.createQueries {
+				t.Errorf("Expected create-queries %q, got %q (%v).", test.createQueries, createQueries, err)
+			}
+		})
+	}
+}
