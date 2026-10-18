@@ -81,3 +81,21 @@ func (p PermissionsGraphDatabasePermissions) IsRevoked() bool {
 
 	return p.Details == nil || *p.Details == PermissionsGraphDatabasePermissionsDetailsNo
 }
+
+// Returns the permissions of the edge, with the omitted `download`, `data-model` and `details` permissions set to their
+// revoked values. Metabase omits revoked permissions from its responses, so the omitted permissions are revoked, like an
+// omitted `create-queries` permission is `no`. Advanced permissions are always omitted on the free edition.
+func (p PermissionsGraphDatabasePermissions) WithOmittedPermissionsRevoked() PermissionsGraphDatabasePermissions {
+	revoked := NewRevokedDatabasePermissions(true)
+	if p.Download == nil {
+		p.Download = revoked.Download
+	}
+	if p.DataModel == nil {
+		p.DataModel = revoked.DataModel
+	}
+	if p.Details == nil {
+		p.Details = revoked.Details
+	}
+
+	return p
+}

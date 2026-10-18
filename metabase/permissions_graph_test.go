@@ -73,3 +73,43 @@ func TestNewRevokedDatabasePermissions(t *testing.T) {
 		})
 	}
 }
+
+func TestWithOmittedPermissionsRevoked(t *testing.T) {
+	parse := func(s string) PermissionsGraphDatabasePermissions {
+		var p PermissionsGraphDatabasePermissions
+		if err := json.Unmarshal([]byte(s), &p); err != nil {
+			t.Fatalf("Failed to parse permissions: %v", err)
+		}
+		return p
+	}
+
+	tests := map[string]struct {
+		permissions string
+		expected    string
+	}{
+		"missing": {
+			permissions: `{"view-data": "unrestricted"}`,
+			expected:    `{"view-data": "unrestricted", "download": {"schemas": "none"}, "data-model": {"schemas": "none"}, "details": "no"}`,
+		},
+		"present": {
+			permissions: `{"view-data": "unrestricted", "download": {"schemas": "full"}, "data-model": {"schemas": "all"}, "details": "yes"}`,
+			expected:    `{"view-data": "unrestricted", "download": {"schemas": "full"}, "data-model": {"schemas": "all"}, "details": "yes"}`,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			actual, err := json.Marshal(parse(test.permissions).WithOmittedPermissionsRevoked())
+			if err != nil {
+				t.Fatalf("Failed to serialize the permissions: %v", err)
+			}
+			expected, err := json.Marshal(parse(test.expected))
+			if err != nil {
+				t.Fatalf("Failed to serialize the expected permissions: %v", err)
+			}
+			if string(actual) != string(expected) {
+				t.Errorf("Expected %s, got %s.", expected, actual)
+			}
+		})
+	}
+}
