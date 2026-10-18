@@ -433,7 +433,7 @@ resource "metabase_database_permission" "parallel_%[1]d" {
 	})
 }
 
-func testAccDatabasePermissionDrift() string {
+func testAccDatabasePermissionDrift(createQueries string) string {
 	return fmt.Sprintf(`
 resource "metabase_permissions_group" "drift" {
   name = "🌊 Database permission drift"
@@ -446,8 +446,7 @@ resource "metabase_database_permission" "drift" {
   create_queries = %s
 }
 `,
-		// Metabase prunes the table set to "no" from its response, which should not be reported as a change.
-		perTableCreateQueries(6),
+		createQueries,
 	)
 }
 
@@ -461,8 +460,14 @@ func TestAccDatabasePermissionResourceDrift(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				// The framework fails the step if the plan after the apply is not empty, i.e. if the reshaped response
-				// is reported as a change.
-				Config: providerApiKeyConfig + testAccDatabasePermissionDrift(),
+				// is reported as a change. Every table has the same value, so Metabase collapses its response to a
+				// single value.
+				Config: providerApiKeyConfig + testAccDatabasePermissionDrift(perTableCreateQueries()),
+			},
+			{
+				// Metabase prunes the table set to "no" from its response, which should not be reported as a change
+				// either.
+				Config: providerApiKeyConfig + testAccDatabasePermissionDrift(perTableCreateQueries(6)),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					testAccStoreAttribute("metabase_database_permission.drift", "group", &groupId),
 				),
@@ -472,13 +477,13 @@ func TestAccDatabasePermissionResourceDrift(t *testing.T) {
 				PreConfig: func() {
 					testAccSetDatabasePermissions(t, groupId, "1", `{"view-data":"unrestricted","create-queries":"query-builder-and-native"}`)
 				},
-				Config:             providerApiKeyConfig + testAccDatabasePermissionDrift(),
+				Config:             providerApiKeyConfig + testAccDatabasePermissionDrift(perTableCreateQueries(6)),
 				PlanOnly:           true,
 				ExpectNonEmptyPlan: true,
 			},
 			{
 				// Applying the configuration reverts the change.
-				Config: providerApiKeyConfig + testAccDatabasePermissionDrift(),
+				Config: providerApiKeyConfig + testAccDatabasePermissionDrift(perTableCreateQueries(6)),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					func(s *terraform.State) error {
 						createQueries, err := testAccGetCreateQueries(getGroup(), "1")
