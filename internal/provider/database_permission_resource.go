@@ -292,7 +292,9 @@ func makeWrittenDatabasePermissions(p metabase.PermissionsGraphDatabasePermissio
 // Returns whether the permissions are the same, whatever the order of the keys of JSON objects. Permissions which cannot
 // be compared are considered different.
 func (w writtenDatabasePermissions) equal(other writtenDatabasePermissions) bool {
-	// Going through generic values ignores the order of the keys of JSON objects, which are decoded as maps.
+	// The permissions hold the JSON returned by Metabase as is, whose objects can list the same keys in a different
+	// order. Decoding it into `any` turns JSON objects into Go maps, which have no order, such that `reflect.DeepEqual`
+	// compares the keys and values whatever their order.
 	decode := func(p writtenDatabasePermissions) (any, error) {
 		serialized, err := json.Marshal(p)
 		if err != nil {
