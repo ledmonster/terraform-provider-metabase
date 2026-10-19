@@ -184,9 +184,12 @@ type privateState interface {
 	SetKey(ctx context.Context, key string, value []byte) diag.Diagnostics
 }
 
-// Returns the value stored as JSON under the given key of the private state, or `nil` if none is stored.
-func getPrivateStateValue[T any](ctx context.Context, private privateState, key string) (*T, diag.Diagnostics) {
-	b, diags := private.GetKey(ctx, key)
+// A key of the private state, under which a JSON value of type T is stored.
+type privateStateKey[T any] string
+
+// Returns the value stored under the given key of the private state, or `nil` if none is stored.
+func readPrivateState[T any](ctx context.Context, private privateState, key privateStateKey[T]) (*T, diag.Diagnostics) {
+	b, diags := private.GetKey(ctx, string(key))
 	if diags.HasError() || b == nil {
 		return nil, diags
 	}
@@ -200,8 +203,8 @@ func getPrivateStateValue[T any](ctx context.Context, private privateState, key 
 	return &v, diags
 }
 
-// Stores the given value as JSON under the given key of the private state.
-func setPrivateStateValue(ctx context.Context, private privateState, key string, value any) diag.Diagnostics {
+// Stores the given value under the given key of the private state.
+func writePrivateState[T any](ctx context.Context, private privateState, key privateStateKey[T], value T) diag.Diagnostics {
 	b, err := json.Marshal(value)
 	if err != nil {
 		var diags diag.Diagnostics
@@ -209,5 +212,5 @@ func setPrivateStateValue(ctx context.Context, private privateState, key string,
 		return diags
 	}
 
-	return private.SetKey(ctx, key, b)
+	return private.SetKey(ctx, string(key), b)
 }

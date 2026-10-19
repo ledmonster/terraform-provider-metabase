@@ -62,28 +62,30 @@ func (f fakePrivateState) SetKey(ctx context.Context, key string, value []byte) 
 	return nil
 }
 
-func TestPrivateStateValue(t *testing.T) {
+func TestPrivateState(t *testing.T) {
 	t.Parallel()
 
 	type value struct {
 		Name string `json:"name"`
 	}
 	private := fakePrivateState{"invalid": []byte(`{`)}
+	key := privateStateKey[value]("key")
+	invalidKey := privateStateKey[value]("invalid")
 
-	missing, diags := getPrivateStateValue[value](context.Background(), private, "key")
+	missing, diags := readPrivateState(context.Background(), private, key)
 	if diags.HasError() || missing != nil {
 		t.Fatalf("Expected no value, got %v (%v).", missing, diags)
 	}
 
-	if diags := setPrivateStateValue(context.Background(), private, "key", value{Name: "stored"}); diags.HasError() {
+	if diags := writePrivateState(context.Background(), private, key, value{Name: "stored"}); diags.HasError() {
 		t.Fatalf("Unexpected error: %v", diags)
 	}
-	stored, diags := getPrivateStateValue[value](context.Background(), private, "key")
+	stored, diags := readPrivateState(context.Background(), private, key)
 	if diags.HasError() || stored == nil || stored.Name != "stored" {
 		t.Errorf("Expected the stored value, got %v (%v).", stored, diags)
 	}
 
-	if _, diags := getPrivateStateValue[value](context.Background(), private, "invalid"); !diags.HasError() {
+	if _, diags := readPrivateState(context.Background(), private, invalidKey); !diags.HasError() {
 		t.Errorf("Expected an error for an invalid value.")
 	}
 }

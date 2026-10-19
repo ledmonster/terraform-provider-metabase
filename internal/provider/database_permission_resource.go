@@ -272,7 +272,7 @@ func updateDatabasePermissions(ctx context.Context, client *metabase.ClientWithR
 
 // The key in the private state storing the `view-data` and `create-queries` permissions returned by Metabase after the
 // last write. See `Read`.
-const writtenDatabasePermissionsPrivateKey = "written_permissions"
+const writtenDatabasePermissionsKey privateStateKey[metabase.PermissionsGraphDatabasePermissions] = "written_permissions"
 
 // Returns the `view-data` and `create-queries` permissions of an edge, as stored in the private state after a write
 // (see `Read`).
@@ -397,7 +397,7 @@ func (r *DatabasePermissionResource) Create(ctx context.Context, req resource.Cr
 	}
 	plan.DatabasePermissions = *permissions
 
-	resp.Diagnostics.Append(setPrivateStateValue(ctx, resp.Private, writtenDatabasePermissionsPrivateKey, makeWrittenDatabasePermissions(*updated))...)
+	resp.Diagnostics.Append(writePrivateState(ctx, resp.Private, writtenDatabasePermissionsKey, makeWrittenDatabasePermissions(*updated))...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -409,7 +409,7 @@ func (r *DatabasePermissionResource) Read(ctx context.Context, req resource.Read
 		return
 	}
 
-	written, diags := getPrivateStateValue[metabase.PermissionsGraphDatabasePermissions](ctx, req.Private, writtenDatabasePermissionsPrivateKey)
+	written, diags := readPrivateState(ctx, req.Private, writtenDatabasePermissionsKey)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -471,7 +471,7 @@ func (r *DatabasePermissionResource) Update(ctx context.Context, req resource.Up
 	}
 	plan.DatabasePermissions = *permissions
 
-	resp.Diagnostics.Append(setPrivateStateValue(ctx, resp.Private, writtenDatabasePermissionsPrivateKey, makeWrittenDatabasePermissions(*updated))...)
+	resp.Diagnostics.Append(writePrivateState(ctx, resp.Private, writtenDatabasePermissionsKey, makeWrittenDatabasePermissions(*updated))...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -554,6 +554,6 @@ func (r *DatabasePermissionResource) ImportState(ctx context.Context, req resour
 		DatabasePermissions: *model,
 	}
 
-	resp.Diagnostics.Append(setPrivateStateValue(ctx, resp.Private, writtenDatabasePermissionsPrivateKey, makeWrittenDatabasePermissions(*permissions))...)
+	resp.Diagnostics.Append(writePrivateState(ctx, resp.Private, writtenDatabasePermissionsKey, makeWrittenDatabasePermissions(*permissions))...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
