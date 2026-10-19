@@ -310,9 +310,9 @@ func (w writtenDatabasePermissions) equal(other writtenDatabasePermissions) bool
 	return errA == nil && errB == nil && reflect.DeepEqual(va, vb)
 }
 
-// Makes the permissions to send to Metabase. The optional permissions are only sent when they are set in the
-// configuration: the plan can contain their values from the state (or unknown values), which should not be sent back to
-// Metabase.
+// Makes the permissions to send to Metabase: the permissions of the plan, except the optional permissions, which are
+// only sent when they are set in the configuration. Otherwise, the plan contains their values from the state (or
+// unknown values), which should not be sent back to Metabase.
 func makeRequestedDatabasePermissions(plan DatabasePermissionResourceModel, config DatabasePermissionResourceModel) DatabasePermissions {
 	return DatabasePermissions{
 		Group:         plan.Group,
