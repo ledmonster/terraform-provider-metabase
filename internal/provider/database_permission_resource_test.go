@@ -624,7 +624,7 @@ func TestWriteDatabasePermissionsChecksPermissions(t *testing.T) {
 	}
 }
 
-func TestSameDatabasePermissions(t *testing.T) {
+func TestWrittenDatabasePermissionsEqual(t *testing.T) {
 	parse := func(s string) metabase.PermissionsGraphDatabasePermissions {
 		var p metabase.PermissionsGraphDatabasePermissions
 		if err := json.Unmarshal([]byte(s), &p); err != nil {
@@ -662,7 +662,9 @@ func TestSameDatabasePermissions(t *testing.T) {
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			if actual := sameDatabasePermissions(parse(test.a), parse(test.b)); actual != test.expected {
+			a := makeWrittenDatabasePermissions(parse(test.a))
+			b := makeWrittenDatabasePermissions(parse(test.b))
+			if actual := a.equal(b); actual != test.expected {
 				t.Errorf("Expected %t, got %t.", test.expected, actual)
 			}
 		})
@@ -680,9 +682,10 @@ func TestMakeWrittenDatabasePermissions(t *testing.T) {
 		t.Fatalf("Failed to serialize the permissions: %v", err)
 	}
 
-	expected := `{"create-queries":{"PUBLIC":{"1":"query-builder"}},"view-data":"unrestricted"}`
+	// This is the JSON value stored in the private state.
+	expected := `{"view-data":"unrestricted","create-queries":{"PUBLIC":{"1":"query-builder"}}}`
 	if string(written) != expected {
-		t.Errorf("Expected only view-data and create-queries to be stored, got %s.", written)
+		t.Errorf("Expected %s, got %s.", expected, written)
 	}
 }
 

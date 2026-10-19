@@ -270,25 +270,31 @@ func updateDatabasePermissions(ctx context.Context, client *metabase.ClientWithR
 	return updateResp.JSON200, diags
 }
 
-// The key in the private state storing the `view-data` and `create-queries` permissions returned by Metabase after the
-// last write. See `Read`.
-const writtenDatabasePermissionsKey privateStateKey[metabase.PermissionsGraphDatabasePermissions] = "written_permissions"
+// The `view-data` and `create-queries` permissions of an edge returned by Metabase after a write, which are stored in
+// the private state. They are the only permissions which can be JSON objects, whose shape Metabase can change (see
+// `Read`).
+type writtenDatabasePermissions struct {
+	ViewData      metabase.PermissionsGraphDatabasePermissions_ViewData       `json:"view-data"`
+	CreateQueries *metabase.PermissionsGraphDatabasePermissions_CreateQueries `json:"create-queries,omitempty"`
+}
 
-// Returns the `view-data` and `create-queries` permissions of an edge, as stored in the private state after a write
-// (see `Read`).
-func makeWrittenDatabasePermissions(p metabase.PermissionsGraphDatabasePermissions) metabase.PermissionsGraphDatabasePermissions {
-	return metabase.PermissionsGraphDatabasePermissions{
+// The key in the private state storing the permissions written by the last write.
+const writtenDatabasePermissionsKey privateStateKey[writtenDatabasePermissions] = "written_permissions"
+
+// Returns the written permissions of an edge returned by Metabase.
+func makeWrittenDatabasePermissions(p metabase.PermissionsGraphDatabasePermissions) writtenDatabasePermissions {
+	return writtenDatabasePermissions{
 		ViewData:      p.ViewData,
 		CreateQueries: p.CreateQueries,
 	}
 }
 
-// Returns whether the `view-data` and `create-queries` permissions are the same, whatever the order of the keys of JSON
-// objects. Permissions which cannot be compared are considered different.
-func sameDatabasePermissions(a, b metabase.PermissionsGraphDatabasePermissions) bool {
+// Returns whether the permissions are the same, whatever the order of the keys of JSON objects. Permissions which cannot
+// be compared are considered different.
+func (w writtenDatabasePermissions) equal(other writtenDatabasePermissions) bool {
 	// Going through generic values ignores the order of the keys of JSON objects, which are decoded as maps.
-	decode := func(p metabase.PermissionsGraphDatabasePermissions) (any, error) {
-		serialized, err := json.Marshal(makeWrittenDatabasePermissions(p))
+	decode := func(p writtenDatabasePermissions) (any, error) {
+		serialized, err := json.Marshal(p)
 		if err != nil {
 			return nil, err
 		}
@@ -298,8 +304,8 @@ func sameDatabasePermissions(a, b metabase.PermissionsGraphDatabasePermissions) 
 		return v, err
 	}
 
-	va, errA := decode(a)
-	vb, errB := decode(b)
+	va, errA := decode(w)
+	vb, errB := decode(other)
 
 	return errA == nil && errB == nil && reflect.DeepEqual(va, vb)
 }
@@ -431,7 +437,7 @@ func (r *DatabasePermissionResource) Read(ctx context.Context, req resource.Read
 	// permissions were stored after a write. Otherwise, the permissions were changed outside of Terraform, and the
 	// response is used instead, such that the change is reported.
 	var existing *DatabasePermissions
-	if written == nil || sameDatabasePermissions(*written, *permissions) {
+	if written == nil || written.equal(makeWrittenDatabasePermissions(*permissions)) {
 		existing = &state.DatabasePermissions
 	}
 
