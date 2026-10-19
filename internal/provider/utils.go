@@ -177,3 +177,37 @@ func getIgnoredPermissionsGroups(ctx context.Context, list types.Set) (map[strin
 
 	return ignoredGroups, diags
 }
+
+// The private state of a resource, as provided by the framework (e.g. `req.Private` or `resp.Private`).
+type privateState interface {
+	GetKey(ctx context.Context, key string) ([]byte, diag.Diagnostics)
+	SetKey(ctx context.Context, key string, value []byte) diag.Diagnostics
+}
+
+// Returns the value stored as JSON under the given key of the private state, or `nil` if none is stored.
+func getPrivateStateValue[T any](ctx context.Context, private privateState, key string) (*T, diag.Diagnostics) {
+	b, diags := private.GetKey(ctx, key)
+	if diags.HasError() || b == nil {
+		return nil, diags
+	}
+
+	var v T
+	if err := json.Unmarshal(b, &v); err != nil {
+		diags.AddError(fmt.Sprintf("Unexpected error reading %q from the private state.", key), err.Error())
+		return nil, diags
+	}
+
+	return &v, diags
+}
+
+// Stores the given value as JSON under the given key of the private state.
+func setPrivateStateValue(ctx context.Context, private privateState, key string, value any) diag.Diagnostics {
+	b, err := json.Marshal(value)
+	if err != nil {
+		var diags diag.Diagnostics
+		diags.AddError(fmt.Sprintf("Unexpected error storing %q in the private state.", key), err.Error())
+		return diags
+	}
+
+	return private.SetKey(ctx, key, b)
+}

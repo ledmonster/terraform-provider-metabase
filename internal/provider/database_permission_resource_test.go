@@ -669,43 +669,20 @@ func TestSameDatabasePermissions(t *testing.T) {
 	}
 }
 
-// A private state storing its values in memory.
-type fakePrivateState map[string][]byte
-
-func (f fakePrivateState) GetKey(ctx context.Context, key string) ([]byte, diag.Diagnostics) {
-	return f[key], nil
-}
-
-func (f fakePrivateState) SetKey(ctx context.Context, key string, value []byte) diag.Diagnostics {
-	f[key] = value
-	return nil
-}
-
-func TestWrittenDatabasePermissions(t *testing.T) {
-	private := fakePrivateState{}
-
-	written, diags := getWrittenDatabasePermissions(context.Background(), private)
-	if diags.HasError() || written != nil {
-		t.Fatalf("Expected no written permissions, got %v (%v).", written, diags)
-	}
-
+func TestMakeWrittenDatabasePermissions(t *testing.T) {
 	var p metabase.PermissionsGraphDatabasePermissions
-	if err := json.Unmarshal([]byte(`{"view-data":"unrestricted","create-queries":{"PUBLIC":{"1":"query-builder"}},"download":{"schemas":"full"}}`), &p); err != nil {
+	if err := json.Unmarshal([]byte(`{"view-data":"unrestricted","create-queries":{"PUBLIC":{"1":"query-builder"}},"download":{"schemas":"full"},"details":"yes"}`), &p); err != nil {
 		t.Fatalf("Failed to parse permissions: %v", err)
 	}
-	if diags := setWrittenDatabasePermissions(context.Background(), private, p); diags.HasError() {
-		t.Fatalf("Unexpected error: %v", diags)
+
+	written, err := json.Marshal(makeWrittenDatabasePermissions(p))
+	if err != nil {
+		t.Fatalf("Failed to serialize the permissions: %v", err)
 	}
 
-	written, diags = getWrittenDatabasePermissions(context.Background(), private)
-	if diags.HasError() || written == nil {
-		t.Fatalf("Expected written permissions, got %v (%v).", written, diags)
-	}
-	if !sameDatabasePermissions(*written, p) {
-		t.Errorf("Expected the written permissions to be the same as the stored ones, got %s.", private[writtenDatabasePermissionsPrivateKey])
-	}
-	if written.Download != nil {
-		t.Errorf("Expected only view-data and create-queries to be stored, got %s.", private[writtenDatabasePermissionsPrivateKey])
+	expected := `{"create-queries":{"PUBLIC":{"1":"query-builder"}},"view-data":"unrestricted"}`
+	if string(written) != expected {
+		t.Errorf("Expected only view-data and create-queries to be stored, got %s.", written)
 	}
 }
 

@@ -274,47 +274,13 @@ func updateDatabasePermissions(ctx context.Context, client *metabase.ClientWithR
 // last write. See `Read`.
 const writtenDatabasePermissionsPrivateKey = "written_permissions"
 
-// The private state of a resource.
-type privateState interface {
-	GetKey(ctx context.Context, key string) ([]byte, diag.Diagnostics)
-	SetKey(ctx context.Context, key string, value []byte) diag.Diagnostics
-}
-
-// Returns the `view-data` and `create-queries` permissions stored in the private state after the last write, or `nil` if
-// none are stored.
-func getWrittenDatabasePermissions(ctx context.Context, private privateState) (*metabase.PermissionsGraphDatabasePermissions, diag.Diagnostics) {
-	b, diags := private.GetKey(ctx, writtenDatabasePermissionsPrivateKey)
-	if diags.HasError() || b == nil {
-		return nil, diags
-	}
-
-	var p metabase.PermissionsGraphDatabasePermissions
-	if err := json.Unmarshal(b, &p); err != nil {
-		diags.AddError("Unexpected error reading the permissions stored in the private state.", err.Error())
-		return nil, diags
-	}
-
-	return &p, diags
-}
-
-// Stores the `view-data` and `create-queries` permissions returned by Metabase after a write in the private state.
-func setWrittenDatabasePermissions(ctx context.Context, private privateState, p metabase.PermissionsGraphDatabasePermissions) diag.Diagnostics {
-	b, err := marshalWrittenDatabasePermissions(p)
-	if err != nil {
-		var diags diag.Diagnostics
-		diags.AddError("Unexpected error storing the permissions in the private state.", err.Error())
-		return diags
-	}
-
-	return private.SetKey(ctx, writtenDatabasePermissionsPrivateKey, b)
-}
-
-// Returns the JSON serialization of the `view-data` and `create-queries` permissions, as stored in the private state.
-func marshalWrittenDatabasePermissions(p metabase.PermissionsGraphDatabasePermissions) ([]byte, error) {
-	return json.Marshal(metabase.PermissionsGraphDatabasePermissions{
+// Returns the `view-data` and `create-queries` permissions of an edge, as stored in the private state after a write
+// (see `Read`).
+func makeWrittenDatabasePermissions(p metabase.PermissionsGraphDatabasePermissions) metabase.PermissionsGraphDatabasePermissions {
+	return metabase.PermissionsGraphDatabasePermissions{
 		ViewData:      p.ViewData,
 		CreateQueries: p.CreateQueries,
-	})
+	}
 }
 
 // Returns whether the `view-data` and `create-queries` permissions are the same, whatever the order of the keys of JSON
@@ -322,7 +288,7 @@ func marshalWrittenDatabasePermissions(p metabase.PermissionsGraphDatabasePermis
 func sameDatabasePermissions(a, b metabase.PermissionsGraphDatabasePermissions) bool {
 	// Going through generic values ignores the order of the keys of JSON objects, which are decoded as maps.
 	decode := func(p metabase.PermissionsGraphDatabasePermissions) (any, error) {
-		serialized, err := marshalWrittenDatabasePermissions(p)
+		serialized, err := json.Marshal(makeWrittenDatabasePermissions(p))
 		if err != nil {
 			return nil, err
 		}
@@ -431,7 +397,7 @@ func (r *DatabasePermissionResource) Create(ctx context.Context, req resource.Cr
 	}
 	plan.DatabasePermissions = *permissions
 
-	resp.Diagnostics.Append(setWrittenDatabasePermissions(ctx, resp.Private, *updated)...)
+	resp.Diagnostics.Append(setPrivateStateValue(ctx, resp.Private, writtenDatabasePermissionsPrivateKey, makeWrittenDatabasePermissions(*updated))...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -443,7 +409,7 @@ func (r *DatabasePermissionResource) Read(ctx context.Context, req resource.Read
 		return
 	}
 
-	written, diags := getWrittenDatabasePermissions(ctx, req.Private)
+	written, diags := getPrivateStateValue[metabase.PermissionsGraphDatabasePermissions](ctx, req.Private, writtenDatabasePermissionsPrivateKey)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -505,7 +471,7 @@ func (r *DatabasePermissionResource) Update(ctx context.Context, req resource.Up
 	}
 	plan.DatabasePermissions = *permissions
 
-	resp.Diagnostics.Append(setWrittenDatabasePermissions(ctx, resp.Private, *updated)...)
+	resp.Diagnostics.Append(setPrivateStateValue(ctx, resp.Private, writtenDatabasePermissionsPrivateKey, makeWrittenDatabasePermissions(*updated))...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -588,6 +554,6 @@ func (r *DatabasePermissionResource) ImportState(ctx context.Context, req resour
 		DatabasePermissions: *model,
 	}
 
-	resp.Diagnostics.Append(setWrittenDatabasePermissions(ctx, resp.Private, *permissions)...)
+	resp.Diagnostics.Append(setPrivateStateValue(ctx, resp.Private, writtenDatabasePermissionsPrivateKey, makeWrittenDatabasePermissions(*permissions))...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
