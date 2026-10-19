@@ -364,8 +364,8 @@ resource "metabase_database_permission" "deleted" {
 	})
 }
 
-// Creates a database directly using the Metabase API, connected to the same PostgreSQL database as Metabase, and returns
-// its ID. The database is deleted at the end of the test, unless it was deleted by the test.
+// Creates a database directly using the Metabase API, connected to the same PostgreSQL database as Metabase, and
+// returns its ID. The database is deleted at the end of the test, unless it was deleted by the test.
 func testAccCreateBystanderDatabase(t *testing.T, name string) int {
 	t.Helper()
 
@@ -501,8 +501,8 @@ func TestAccDatabasePermissionResourceDrift(t *testing.T) {
 	})
 }
 
-// Reads the graph restricted to the group of the edge. Metabase drops the edges of deleted groups and databases from the
-// graph, which is how the resource is considered deleted. The edges themselves are found by
+// Reads the graph restricted to the group of the edge. Metabase drops the edges of deleted groups and databases from
+// the graph, which is how the resource is considered deleted. The edges themselves are found by
 // `metabase.PermissionsGraph.FindDatabasePermissions`.
 func TestGetDatabasePermissions(t *testing.T) {
 	fake, client := newFakeMetabaseServer(t)
